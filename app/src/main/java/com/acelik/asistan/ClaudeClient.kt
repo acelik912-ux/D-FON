@@ -14,7 +14,7 @@ class ClaudeClient(private val apiKey: String, private val model: String) {
         try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 30_000
-            conn.readTimeout = 120_000
+            conn.readTimeout = 240_000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             conn.setRequestProperty("x-api-key", apiKey)
@@ -22,7 +22,7 @@ class ClaudeClient(private val apiKey: String, private val model: String) {
 
             val body = JSONObject()
                 .put("model", model)
-                .put("max_tokens", 1024)
+                .put("max_tokens", 8000)
                 .put("system", system)
                 .put("messages", messages)
                 .put("tools", tools)

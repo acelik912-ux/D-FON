@@ -11,7 +11,7 @@ android {
 
     defaultConfig {
         applicationId = "com.acelik.asistan"
-        minSdk = 26
+        minSdk = 29
         targetSdk = 34
         versionCode = runNo
         versionName = "1.0.$runNo"
