@@ -1,38 +1,41 @@
 # D-FON — Kişisel Telefon Asistanı
 
-Telefon ayarlarını yazarak ya da sesle değiştirmeni sağlayan Android uygulaması. Arkada Claude yapay zekası çalışır.
+Telefonunu yazarak ya da sesle yönetmeni sağlayan Android uygulaması.
+
+- **Tamamen telefonda çalışır.** Yapay zeka servisine, hesaba ya da sunucuya bağlı değildir.
+- **Ücretsizdir.** API anahtarı, abonelik, reklam yok.
+- **İnternet izni yoktur.** D-FON hiçbir yere veri gönderemez. "İnternette ara" komutları telefonunun kendi tarayıcısında açılır.
 
 ## İndir
 **[D-FON.apk (son sürüm)](https://github.com/acelik912-ux/D-FON/releases/latest/download/D-FON.apk)**
 
-Her `main` güncellemesinde GitHub Actions APK'yı otomatik derler ve yeni bir sürüm yayınlar.
+Her `main` güncellemesinde GitHub Actions APK'yı otomatik derler ve yeni sürüm yayınlar.
 
 ## Kurulum
-1. Yukarıdaki linkten APK'yı indir, aç. "Bilinmeyen kaynaklardan yükleme" uyarısı çıkarsa izin ver.
-2. Uygulamada **⚙** → console.anthropic.com'dan aldığın API anahtarını yapıştır.
-3. **İzinler** düğmesinden iki izni ver: *Sistem ayarlarını değiştirme* ve *Rahatsız Etmeyin erişimi*.
+1. APK'yı indir, aç. "Bilinmeyen kaynaklardan yükleme" uyarısında izin ver.
+2. **İzinler** → *Sistem ayarlarını değiştirme* ve *Rahatsız Etmeyin erişimi* ver.
+3. **Uygulamalar** → D-FON'un açabileceği uygulamaları işaretle.
 
-## Neler yapabilir
-| Doğrudan değiştirir | Ayar ekranını açar (Android kısıtı) |
+## Komutlar
+Uygulamada `yardım` yazınca tam liste çıkar. Örnekler:
+
+| Konu | Örnek |
 |---|---|
-| Parlaklık, otomatik parlaklık | Wi-Fi, Bluetooth, mobil veri, hotspot |
-| Ekran zaman aşımı, otomatik döndürme | Karanlık mod, gece ışığı, yazı boyutu |
-| Ses seviyeleri (medya, zil, alarm…) | Duvar kağıdı, uçak modu, konum |
-| Zil modu, Rahatsız Etmeyin, fener | Pil, depolama, uygulamalar, dil… |
+| Ekran | "parlaklık 40", "ekranı karart", "ekran 2 dakikada kapansın" |
+| Ses | "medya sesi 50", "sessize al", "titreşime al", "rahatsız etmeyi aç" |
+| Diğer | "feneri aç", "gece modu", "durum" |
+| Ayar ekranları | "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu" |
+| Uygulamalar | "WhatsApp'ı aç" (sadece izinli olanlar) |
+| Dosyalar | "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir" |
+| Yazıdan belge | "PDF yap: …", "Word yap: …" |
+| İnternet | "hava durumu ara", "YouTube'da … izle", "trt.net.tr" |
 
-### Uygulamalar ve dosyalar
-- Yüklü her uygulamayı adıyla açar ("WhatsApp'ı aç", "Word'ü aç")
-- 📎 ile ya da "dosya seç" diyerek dosya eklenir
-- Word → PDF, resimler → PDF, metin → PDF
-- PDF → Word, PDF → resim (PNG), PDF özetleme/çeviri
-- Dosyayı istenen uygulamada açma veya paylaşma
-- Çıktılar: `İndirilenler/D-FON` ve `Resimler/D-FON`
+Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al".
 
-Gereksinim: Android 10 veya üstü.
-
-Örnek komutlar: "Parlaklığı %30 yap", "Gece moduna geç", "Telefonu sessize al", "Feneri aç", "Wi-Fi'ı aç".
+Çıktılar `İndirilenler/D-FON` ve `Resimler/D-FON` klasörlerine kaydedilir. Gereksinim: Android 10+.
 
 ## Kod
-- `PhoneTools.kt` — telefonda çalışan araçlar (yeni yetenek buraya eklenir)
-- `ClaudeClient.kt` — Claude API bağlantısı
-- `MainActivity.kt` — sohbet ekranı, sesli komut, ayarlar
+- `CommandEngine.kt` — Türkçe komutları anlayan kural motoru (yeni komut buraya eklenir)
+- `PhoneTools.kt` — telefon ayarları
+- `FileTools.kt` — uygulamalar, dosyalar, PDF/Word dönüştürme (PdfBox-Android)
+- `MainActivity.kt` — ekran, sesli komut, uygulama seçimi
