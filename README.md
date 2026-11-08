@@ -20,6 +20,16 @@ Her `main` güncellemesinde GitHub Actions APK'yı otomatik derler ve yeni bir s
 | Ses seviyeleri (medya, zil, alarm…) | Duvar kağıdı, uçak modu, konum |
 | Zil modu, Rahatsız Etmeyin, fener | Pil, depolama, uygulamalar, dil… |
 
+### Uygulamalar ve dosyalar
+- Yüklü her uygulamayı adıyla açar ("WhatsApp'ı aç", "Word'ü aç")
+- 📎 ile ya da "dosya seç" diyerek dosya eklenir
+- Word → PDF, resimler → PDF, metin → PDF
+- PDF → Word, PDF → resim (PNG), PDF özetleme/çeviri
+- Dosyayı istenen uygulamada açma veya paylaşma
+- Çıktılar: `İndirilenler/D-FON` ve `Resimler/D-FON`
+
+Gereksinim: Android 10 veya üstü.
+
 Örnek komutlar: "Parlaklığı %30 yap", "Gece moduna geç", "Telefonu sessize al", "Feneri aç", "Wi-Fi'ı aç".
 
 ## Kod
