@@ -1,9 +1,11 @@
 package com.acelik.asistan
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -19,10 +21,11 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.text.StaticLayout
 import android.text.TextPaint
-import android.util.Base64
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
+import com.tom_roush.pdfbox.multipdf.PDFMergerUtility
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import java.io.IOException
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -34,87 +37,25 @@ import java.util.zip.ZipOutputStream
 
 data class AttachedFile(val uri: Uri, val name: String, val mime: String, val size: Long)
 
-/** Bir aracın sonucu: yapay zekaya gidecek metin + (varsa) PDF/resim içeriği. */
-class ToolOutput(val text: String, val blocks: JSONArray? = null)
-
 /**
- * Uygulama ve dosya araçları: uygulama açma, dosya seçme/açma/paylaşma,
- * PDF ve Word oluşturma, PDF'i resme çevirme, dosya içeriğini okuma.
+ * Uygulama ve dosya işlemleri. Hepsi telefonun içinde çalışır; internete bağlanmaz.
  */
 class FileTools(private val activity: Activity) {
 
     val files = mutableListOf<AttachedFile>()
+    /** En son oluşturulan ya da seçilen dosyanın numarası. */
+    var lastFileNo: Int? = null
+        private set
+
     private val cr = activity.contentResolver
     private val pm = activity.packageManager
+    private val prefs = activity.getSharedPreferences("dfon", Context.MODE_PRIVATE)
 
-    var pickRequestedByAi = false
-
-    // ---------------- tanımlar ----------------
-
-    fun definitions(): JSONArray {
-        val t = JSONArray()
-        t.put(tool("uygulamalari_listele",
-            "Telefonda yüklü uygulamaların adlarını listeler. İsteğe bağlı arama kelimesiyle filtreler.",
-            JSONObject().put("arama", str("isteğe bağlı arama kelimesi")), listOf()))
-        t.put(tool("uygulama_ac",
-            "Yüklü bir uygulamayı adıyla açar (ör. WhatsApp, Word, YouTube, Kamera, Hesap Makinesi).",
-            JSONObject().put("ad", str("uygulamanın adı")), listOf("ad")))
-        t.put(tool("dosya_sec",
-            "Kullanıcının telefonundan dosya seçmesi için dosya seçiciyi açar. Kullanıcı seçince seçilen dosyalar otomatik olarak yeni mesajla bildirilir; o zamana kadar bekle.",
-            JSONObject()
-                .put("tur", JSONObject().put("type", "string").put("enum", JSONArray(listOf("hepsi", "pdf", "word", "resim", "metin"))))
-                .put("coklu", JSONObject().put("type", "boolean").put("description", "birden fazla dosya seçilebilsin mi")),
-            listOf("tur")))
-        t.put(tool("dosyalari_listele", "Bu sohbette eklenmiş/oluşturulmuş dosyaları numaralarıyla listeler.", JSONObject(), listOf()))
-        t.put(tool("dosya_ac",
-            "Bir dosyayı açar. 'uygulama' verilirse o uygulamada (ör. Word, Drive PDF Görüntüleyici) açar; verilmezse kullanıcıya uygulama seçtirir.",
-            JSONObject().put("dosya_no", int("dosya numarası")).put("uygulama", str("isteğe bağlı uygulama adı")),
-            listOf("dosya_no")))
-        t.put(tool("dosya_paylas",
-            "Bir dosyayı paylaşır (WhatsApp, Gmail vb.). 'uygulama' verilirse doğrudan o uygulamaya gönderir.",
-            JSONObject().put("dosya_no", int("dosya numarası")).put("uygulama", str("isteğe bağlı uygulama adı")),
-            listOf("dosya_no")))
-        t.put(tool("dosya_oku",
-            "Dosyanın içeriğini senin görmen için okur (PDF, resim, Word .docx, metin). Özetleme, çeviri, PDF'ten Word'e dönüştürme gibi işlerden önce kullan.",
-            JSONObject().put("dosya_no", int("dosya numarası")), listOf("dosya_no")))
-        t.put(tool("pdf_olustur",
-            "PDF oluşturur ve İndirilenler/D-FON klasörüne kaydeder. Ya 'dosya_nolari' (resimler, Word .docx, metin dosyaları; sırayla birleştirilir) ya da 'metin' ver. Word'den PDF'e çevirmede yazı aktarılır, karmaşık biçimler (tablo, resim) aktarılmaz.",
-            JSONObject()
-                .put("dosya_nolari", JSONObject().put("type", "array").put("items", JSONObject().put("type", "integer")))
-                .put("metin", str("PDF'e yazılacak metin. '# ' ile başlayan satırlar başlık olur."))
-                .put("ad", str("dosya adı (uzantısız)")),
-            listOf()))
-        t.put(tool("word_olustur",
-            "Word (.docx) belgesi oluşturur ve İndirilenler/D-FON klasörüne kaydeder. PDF'ten Word'e çevirirken önce dosya_oku ile içeriği oku, sonra metni buraya yaz. '# ' ile başlayan satırlar başlık olur.",
-            JSONObject().put("metin", str("belgenin metni")).put("ad", str("dosya adı (uzantısız)")),
-            listOf("metin")))
-        t.put(tool("pdf_resme_cevir",
-            "PDF'in her sayfasını PNG resim olarak Resimler/D-FON klasörüne kaydeder (en fazla 30 sayfa).",
-            JSONObject().put("dosya_no", int("PDF dosyasının numarası")), listOf("dosya_no")))
-        return t
+    init {
+        PDFBoxResourceLoader.init(activity.applicationContext)
     }
 
-    fun has(name: String) = NAMES.contains(name)
-
-    fun run(name: String, input: JSONObject): ToolOutput = try {
-        when (name) {
-            "uygulamalari_listele" -> ToolOutput(listApps(input.optString("arama")))
-            "uygulama_ac" -> ToolOutput(openApp(input.optString("ad")))
-            "dosya_sec" -> ToolOutput(pick(input.optString("tur", "hepsi"), input.optBoolean("coklu", false), true))
-            "dosyalari_listele" -> ToolOutput(describeFiles())
-            "dosya_ac" -> ToolOutput(openFile(input.optInt("dosya_no"), input.optString("uygulama")))
-            "dosya_paylas" -> ToolOutput(shareFile(input.optInt("dosya_no"), input.optString("uygulama")))
-            "dosya_oku" -> readFile(input.optInt("dosya_no"))
-            "pdf_olustur" -> ToolOutput(makePdf(input))
-            "word_olustur" -> ToolOutput(makeDocx(input.optString("metin"), input.optString("ad")))
-            "pdf_resme_cevir" -> ToolOutput(pdfToImages(input.optInt("dosya_no")))
-            else -> ToolOutput("Bilinmeyen araç: $name")
-        }
-    } catch (e: Exception) {
-        ToolOutput("Hata: ${e.javaClass.simpleName}: ${e.message}")
-    }
-
-    // ---------------- uygulamalar ----------------
+    // ---------------- izinli uygulamalar ----------------
 
     data class App(val label: String, val pkg: String)
 
@@ -122,61 +63,76 @@ class FileTools(private val activity: Activity) {
         val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return pm.queryIntentActivities(i, 0)
             .map { App(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
+            .filter { it.pkg != activity.packageName }
             .distinctBy { it.pkg }
             .sortedBy { norm(it.label) }
     }
 
-    private fun findApp(name: String): App? {
-        val q = norm(name)
-        if (q.isBlank()) return null
-        val apps = installedApps()
-        return apps.firstOrNull { norm(it.label) == q }
-            ?: apps.firstOrNull { norm(it.label).startsWith(q) }
-            ?: apps.firstOrNull { norm(it.label).contains(q) }
-            ?: apps.firstOrNull { q.contains(norm(it.label)) && norm(it.label).length >= 3 }
-            ?: apps.firstOrNull { it.pkg.lowercase().contains(q.replace(" ", "")) }
+    fun allowedPackages(): Set<String> = prefs.getStringSet("izinli", emptySet()) ?: emptySet()
+
+    fun setAllowedPackages(p: Set<String>) {
+        prefs.edit().putStringSet("izinli", HashSet(p)).apply()
     }
 
-    private fun listApps(search: String): String {
-        val q = norm(search)
-        val list = installedApps().filter { q.isBlank() || norm(it.label).contains(q) }
-        if (list.isEmpty()) return "Eşleşen uygulama yok."
-        return "${list.size} uygulama: " + list.joinToString(", ") { it.label }
+    fun allowedApps(): List<App> {
+        val allowed = allowedPackages()
+        return installedApps().filter { it.pkg in allowed }
     }
 
-    private fun openApp(name: String): String {
-        val app = findApp(name) ?: return "'$name' adında uygulama bulunamadı. uygulamalari_listele ile kontrol et."
+    /** Metnin içinde adı geçen uygulamayı bulur (en uzun eşleşme). */
+    fun appInText(text: String, onlyAllowed: Boolean): App? {
+        val t = " ${norm(text)} "
+        val list = if (onlyAllowed) allowedApps() else installedApps()
+        return list
+            .filter { norm(it.label).length >= 2 }
+            .filter { a ->
+                val l = norm(a.label)
+                // kelime başında geçsin: "word" -> "wordu ac" eşleşir, "sword" eşleşmez
+                t.contains(" $l") || t.contains(" ${l.replace(" ", "")}")
+            }
+            .maxByOrNull { norm(it.label).length }
+    }
+
+    fun openApp(app: App): String {
         val i = pm.getLaunchIntentForPackage(app.pkg) ?: return "${app.label} açılamadı."
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        activity.startActivity(i)
+        activity.onMain { activity.startActivity(i) }
         return "${app.label} açıldı."
+    }
+
+    // ---------------- internet (tarayıcıda) ----------------
+
+    fun openUrl(url: String): String {
+        val u = if (url.startsWith("http")) url else "https://$url"
+        val i = Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            activity.onMain { activity.startActivity(i) }
+            "Açıldı: $u"
+        } catch (e: ActivityNotFoundException) {
+            "Telefonda tarayıcı bulunamadı."
+        }
     }
 
     // ---------------- dosya seçme ----------------
 
-    fun pick(type: String, multiple: Boolean, byAi: Boolean): String {
+    fun pick(type: String, multiple: Boolean) {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
         val mimes = when (type) {
             "pdf" -> arrayOf("application/pdf")
-            "word" -> arrayOf(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/msword"
-            )
+            "word" -> arrayOf(DOCX_MIME)
             "resim" -> arrayOf("image/*")
-            "metin" -> arrayOf("text/*")
             else -> arrayOf("*/*")
         }
-        i.type = if (mimes.size == 1) mimes[0] else "*/*"
-        if (mimes.size > 1) i.putExtra(Intent.EXTRA_MIME_TYPES, mimes)
+        i.type = mimes[0]
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple)
-        pickRequestedByAi = byAi
-        @Suppress("DEPRECATION")
-        activity.startActivityForResult(i, REQ_PICK)
-        return "Dosya seçici açıldı. Kullanıcı seçince dosyalar yeni mesajla gelecek; şimdilik kısaca 'Dosyayı seç' de ve bekle."
+        activity.onMain {
+            @Suppress("DEPRECATION")
+            activity.startActivityForResult(i, REQ_PICK)
+        }
     }
 
-    /** Seçici sonucunu işler, eklenen dosyaları döndürür. */
-    fun handlePick(data: Intent?): List<Pair<Int, AttachedFile>> {
+    /** Seçici sonucunu işler, eklenen dosyaların numaralarını döndürür. */
+    fun handlePick(data: Intent?): List<Int> {
         val uris = mutableListOf<Uri>()
         data?.clipData?.let { c -> for (k in 0 until c.itemCount) uris.add(c.getItemAt(k).uri) }
         if (uris.isEmpty()) data?.data?.let { uris.add(it) }
@@ -189,113 +145,178 @@ class FileTools(private val activity: Activity) {
         }
     }
 
-    private fun add(uri: Uri, name: String, mime: String): Pair<Int, AttachedFile> {
-        val f = AttachedFile(uri, name, mime, querySize(uri))
-        files.add(f)
-        return files.size to f
+    private fun add(uri: Uri, name: String, mime: String): Int {
+        files.add(AttachedFile(uri, name, mime, querySize(uri)))
+        lastFileNo = files.size
+        return files.size
     }
 
+    fun name(no: Int) = file(no).name
+
     fun describeFiles(): String =
-        if (files.isEmpty()) "Henüz dosya yok. dosya_sec ile kullanıcıdan dosya iste."
-        else files.mapIndexed { i, f -> "${i + 1}) ${f.name} [${kind(f)}, ${f.size / 1024} KB]" }.joinToString("\n")
+        if (files.isEmpty()) "Henüz dosya yok. 📎 ile ekleyebilirsin."
+        else files.mapIndexed { i, f -> "${i + 1}) ${f.name}" }.joinToString("\n")
 
     private fun file(no: Int): AttachedFile =
-        files.getOrNull(no - 1) ?: throw IllegalArgumentException("$no numaralı dosya yok. Mevcut dosyalar:\n${describeFiles()}")
+        files.getOrNull(no - 1) ?: throw IllegalArgumentException("$no numaralı dosya yok.")
 
-    // ---------------- açma & paylaşma ----------------
+    fun kind(no: Int): String = kind(file(no))
 
-    private fun openFile(no: Int, appName: String): String {
+    // ---------------- açma & paylaşma (sadece izinli uygulamalarla) ----------------
+
+    fun openFile(no: Int, app: App?): String {
         val f = file(no)
         val i = Intent(Intent.ACTION_VIEW)
             .setDataAndType(f.uri, f.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        return launch(i, appName, "${f.name} açıldı", "açacak")
+        return launchWithAllowed(i, app, "${f.name} açılıyor")
     }
 
-    private fun shareFile(no: Int, appName: String): String {
+    fun shareFile(no: Int, app: App?): String {
         val f = file(no)
         val i = Intent(Intent.ACTION_SEND)
             .setType(f.mime)
             .putExtra(Intent.EXTRA_STREAM, f.uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         i.clipData = ClipData.newRawUri(f.name, f.uri)
-        return launch(i, appName, "${f.name} paylaşım için gönderildi", "paylaşacak")
+        return launchWithAllowed(i, app, "${f.name} gönderiliyor")
     }
 
-    private fun launch(i: Intent, appName: String, ok: String, verb: String): String {
-        if (appName.isNotBlank()) {
-            val app = findApp(appName) ?: return "'$appName' uygulaması bulunamadı."
+    private fun launchWithAllowed(i: Intent, app: App?, ok: String): String {
+        val allowed = allowedPackages()
+        val handlers = pm.queryIntentActivities(i, 0)
+            .filter { it.activityInfo.packageName in allowed }
+            .distinctBy { it.activityInfo.packageName }
+        if (app != null) {
+            if (handlers.none { it.activityInfo.packageName == app.pkg }) {
+                return "${app.label} bu dosyayla çalışamıyor ya da izinli değil."
+            }
             i.setPackage(app.pkg)
-            return try {
-                activity.startActivity(i); "$ok (${app.label})."
-            } catch (e: ActivityNotFoundException) {
-                "${app.label} bu dosyayı $verb şekilde açılamadı. Uygulama belirtmeden dene."
-            }
+            activity.onMain { activity.startActivity(i) }
+            return "$ok (${app.label})."
         }
-        return try {
-            activity.startActivity(Intent.createChooser(i, "Uygulama seç").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            "$ok; kullanıcı uygulama seçecek."
-        } catch (e: ActivityNotFoundException) {
-            "Bu dosyayı $verb uygulama bulunamadı."
+        if (handlers.isEmpty()) {
+            return "Bu dosyayla çalışabilen izinli uygulama yok. Üstteki 'Uygulamalar' düğmesinden işaretle."
         }
+        if (handlers.size == 1) {
+            val h = handlers[0].activityInfo
+            i.setClassName(h.packageName, h.name)
+            activity.onMain { activity.startActivity(i) }
+            return "$ok (${handlers[0].loadLabel(pm)})."
+        }
+        val labels = handlers.map { it.loadLabel(pm).toString() }.toTypedArray()
+        activity.onMain {
+            AlertDialog.Builder(activity)
+                .setTitle("Hangi uygulama?")
+                .setItems(labels) { _, which ->
+                    val h = handlers[which].activityInfo
+                    activity.startActivity(Intent(i).setClassName(h.packageName, h.name))
+                }
+                .setNegativeButton("İptal", null)
+                .show()
+        }
+        return "$ok; uygulamayı seç."
     }
 
-    // ---------------- okuma ----------------
+    // ---------------- dönüştürmeler ----------------
 
-    private fun readFile(no: Int): ToolOutput {
-        val f = file(no)
-        return when (kind(f)) {
-            "pdf" -> {
-                if (f.size > 15L * 1024 * 1024) return ToolOutput("PDF çok büyük (15 MB üstü), okunamıyor.")
-                val b64 = Base64.encodeToString(readBytes(f.uri), Base64.NO_WRAP)
-                ToolOutput("${f.name} içeriği ekte.", JSONArray().put(
-                    JSONObject().put("type", "document").put("source",
-                        JSONObject().put("type", "base64").put("media_type", "application/pdf").put("data", b64))
-                ))
-            }
-            "resim" -> {
-                val b64 = Base64.encodeToString(jpegForAi(f.uri), Base64.NO_WRAP)
-                ToolOutput("${f.name} resmi ekte.", JSONArray().put(
-                    JSONObject().put("type", "image").put("source",
-                        JSONObject().put("type", "base64").put("media_type", "image/jpeg").put("data", b64))
-                ))
-            }
-            "word" -> ToolOutput("${f.name} metni:\n" + docxText(f.uri).take(60_000))
-            "metin" -> ToolOutput("${f.name} metni:\n" + String(readBytes(f.uri), Charsets.UTF_8).take(60_000))
-            else -> ToolOutput("Bu dosya türü (${f.mime}) okunamıyor.")
-        }
-    }
-
-    // ---------------- PDF oluşturma ----------------
-
-    private fun makePdf(input: JSONObject): String {
-        val nos = input.optJSONArray("dosya_nolari")
-        val text = input.optString("metin")
+    /** Resimler, Word ve metin dosyalarından (sırayla) tek PDF yapar. */
+    fun filesToPdf(nos: List<Int>): String {
         val doc = PdfDocument()
         var page = 0
         try {
-            if (nos != null && nos.length() > 0) {
-                for (k in 0 until nos.length()) {
-                    val f = file(nos.getInt(k))
-                    page = when (kind(f)) {
-                        "resim" -> drawImage(doc, f.uri, page)
-                        "word" -> drawText(doc, docxText(f.uri), page)
-                        "metin" -> drawText(doc, String(readBytes(f.uri), Charsets.UTF_8), page)
-                        else -> throw IllegalArgumentException("${f.name} PDF'e eklenemez (sadece resim, Word, metin).")
-                    }
+            for (no in nos) {
+                val f = file(no)
+                page = when (kind(f)) {
+                    "resim" -> drawImage(doc, f.uri, page)
+                    "word" -> drawText(doc, docxText(f.uri), page)
+                    "metin" -> drawText(doc, String(readBytes(f.uri), Charsets.UTF_8), page)
+                    else -> throw IllegalArgumentException("${f.name} PDF'e çevrilemez (resim, Word .docx veya metin olmalı).")
                 }
-            } else if (text.isNotBlank()) {
-                page = drawText(doc, text, page)
-            } else {
-                return "PDF için 'dosya_nolari' ya da 'metin' gerekli."
             }
-            val name = fileName(input.optString("ad"), firstName(nos), "pdf")
-            val (no, _) = save(name, "application/pdf", Environment.DIRECTORY_DOWNLOADS) { doc.writeTo(it) }
-            return "PDF oluşturuldu: İndirilenler/D-FON/$name ($page sayfa). Dosya no: $no"
+            val name = fileName(file(nos.first()).name.substringBeforeLast('.'), "pdf")
+            val no = save(name, "application/pdf", Environment.DIRECTORY_DOWNLOADS) { doc.writeTo(it) }
+            return "PDF hazır: İndirilenler/D-FON/$name ($page sayfa)."
+                .also { lastFileNo = no }
         } finally {
             doc.close()
         }
     }
+
+    fun textToPdf(text: String, title: String): String {
+        val doc = PdfDocument()
+        try {
+            val pages = drawText(doc, text, 0)
+            val name = fileName(title, "pdf")
+            save(name, "application/pdf", Environment.DIRECTORY_DOWNLOADS) { doc.writeTo(it) }
+            return "PDF hazır: İndirilenler/D-FON/$name ($pages sayfa)."
+        } finally {
+            doc.close()
+        }
+    }
+
+    fun pdfToDocx(no: Int): String {
+        val f = file(no)
+        val text = pdfText(f.uri)
+        if (text.isBlank()) {
+            return "${f.name} içinde okunabilir yazı yok (taranmış/fotoğraf PDF olabilir). Bunun yerine 'PDF'i resme çevir' deneyebilirsin."
+        }
+        val name = fileName(f.name.substringBeforeLast('.'), "docx")
+        save(name, DOCX_MIME, Environment.DIRECTORY_DOWNLOADS) { writeDocx(it, text) }
+        return "Word belgesi hazır: İndirilenler/D-FON/$name"
+    }
+
+    fun textToDocx(text: String, title: String): String {
+        val name = fileName(title, "docx")
+        save(name, DOCX_MIME, Environment.DIRECTORY_DOWNLOADS) { writeDocx(it, text) }
+        return "Word belgesi hazır: İndirilenler/D-FON/$name"
+    }
+
+    fun mergePdfs(nos: List<Int>): String {
+        if (nos.size < 2) return "Birleştirmek için en az 2 PDF seç."
+        val name = fileName("birlesik", "pdf")
+        save(name, "application/pdf", Environment.DIRECTORY_DOWNLOADS) { out ->
+            val m = PDFMergerUtility()
+            val streams = nos.map { cr.openInputStream(file(it).uri) ?: throw IOException("PDF açılamadı") }
+            try {
+                streams.forEach { m.addSource(it) }
+                m.destinationStream = out
+                m.mergeDocuments(MemoryUsageSetting.setupMixed(64L * 1024 * 1024))
+            } finally {
+                streams.forEach { s -> runCatching { s.close() } }
+            }
+        }
+        return "${nos.size} PDF birleştirildi: İndirilenler/D-FON/$name"
+    }
+
+    fun pdfToImages(no: Int): String {
+        val f = file(no)
+        val pfd = cr.openFileDescriptor(f.uri, "r") ?: throw IOException("PDF açılamadı")
+        val base = f.name.substringBeforeLast('.')
+        var made = 0
+        var total = 0
+        pfd.use { fd ->
+            PdfRenderer(fd).use { r ->
+                total = r.pageCount
+                for (k in 0 until minOf(total, 50)) {
+                    r.openPage(k).use { pg ->
+                        val bmp = Bitmap.createBitmap(pg.width * 2, pg.height * 2, Bitmap.Config.ARGB_8888)
+                        bmp.eraseColor(Color.WHITE)
+                        pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        save(fileName("${base}_sayfa${k + 1}", "png"), "image/png", Environment.DIRECTORY_PICTURES) {
+                            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        bmp.recycle()
+                        made++
+                    }
+                }
+            }
+        }
+        val more = if (total > 50) " (ilk 50 sayfa)" else ""
+        return "$made sayfa resme çevrildi$more: Resimler/D-FON klasörü (Galeri'de görünür)."
+    }
+
+    // ---------------- çizim ----------------
 
     private fun drawImage(doc: PdfDocument, uri: Uri, startPage: Int): Int {
         val bmp = decodeScaled(uri, 2000) ?: throw IOException("Resim açılamadı")
@@ -319,7 +340,6 @@ class FileTools(private val activity: Activity) {
         }
         val width = PAGE_W - 2 * MARGIN
         val usable = PAGE_H - 2 * MARGIN
-        // Her paragrafı ayrı düzen olarak hazırla, sonra sayfalara yerleştir
         val layouts = raw.replace("\r", "").split("\n").map { line ->
             val isHead = line.startsWith("# ")
             val t = if (isHead) line.removePrefix("# ") else line
@@ -337,7 +357,6 @@ class FileTools(private val activity: Activity) {
                     page = doc.startPage(PdfDocument.PageInfo.Builder(PAGE_W, PAGE_H, ++pageNo).create())
                     y = 0
                 }
-                // Bu sayfaya sığan satırları birlikte çiz
                 val top = lay.getLineTop(line)
                 var end = line
                 while (end < lay.lineCount && y + (lay.getLineBottom(end) - top) <= usable) end++
@@ -357,24 +376,19 @@ class FileTools(private val activity: Activity) {
         return pageNo
     }
 
-    // ---------------- Word oluşturma / okuma ----------------
+    // ---------------- Word & PDF metni ----------------
 
-    private fun makeDocx(text: String, name: String): String {
-        if (text.isBlank()) return "Word için metin gerekli."
-        val fname = fileName(name, null, "docx")
-        val (no, _) = save(fname, DOCX_MIME, Environment.DIRECTORY_DOWNLOADS) { out ->
-            ZipOutputStream(out).use { z ->
-                fun put(path: String, content: String) {
-                    z.putNextEntry(ZipEntry(path))
-                    z.write(content.toByteArray(Charsets.UTF_8))
-                    z.closeEntry()
-                }
-                put("[Content_Types].xml", CONTENT_TYPES)
-                put("_rels/.rels", RELS)
-                put("word/document.xml", documentXml(text))
-            }
+    private fun writeDocx(out: OutputStream, text: String) {
+        val z = ZipOutputStream(out)
+        fun put(path: String, content: String) {
+            z.putNextEntry(ZipEntry(path))
+            z.write(content.toByteArray(Charsets.UTF_8))
+            z.closeEntry()
         }
-        return "Word belgesi oluşturuldu: İndirilenler/D-FON/$fname. Dosya no: $no"
+        put("[Content_Types].xml", CONTENT_TYPES)
+        put("_rels/.rels", RELS)
+        put("word/document.xml", documentXml(text))
+        z.finish()
     }
 
     private fun documentXml(text: String): String {
@@ -405,8 +419,8 @@ class FileTools(private val activity: Activity) {
                     if (e.name == "word/document.xml") {
                         val xml = String(z.readBytes(), Charsets.UTF_8)
                         return xml
-                            .replace(Regex("</w:p>"), "\n")
-                            .replace(Regex("<w:tab/>"), "\t")
+                            .replace("</w:p>", "\n")
+                            .replace("<w:tab/>", "\t")
                             .replace(Regex("<w:br[^>]*/>"), "\n")
                             .replace(Regex("<[^>]+>"), "")
                             .replace("&lt;", "<").replace("&gt;", ">")
@@ -421,41 +435,25 @@ class FileTools(private val activity: Activity) {
         throw IOException("Bu bir .docx değil ya da okunamadı (eski .doc biçimi desteklenmiyor).")
     }
 
-    // ---------------- PDF -> resim ----------------
-
-    private fun pdfToImages(no: Int): String {
-        val f = file(no)
-        if (kind(f) != "pdf") return "${f.name} bir PDF değil."
-        val pfd = cr.openFileDescriptor(f.uri, "r") ?: throw IOException("PDF açılamadı")
-        val base = f.name.substringBeforeLast('.')
-        val made = mutableListOf<Int>()
-        var total = 0
-        pfd.use { fd ->
-            PdfRenderer(fd).use { r ->
-                total = r.pageCount
-                val count = minOf(r.pageCount, 30)
-                for (k in 0 until count) {
-                    r.openPage(k).use { pg ->
-                        val bmp = Bitmap.createBitmap(pg.width * 2, pg.height * 2, Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(Color.WHITE)
-                        pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        val (n, _) = save("${base}_sayfa${k + 1}_${stamp()}.png", "image/png", Environment.DIRECTORY_PICTURES) {
-                            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
-                        }
-                        bmp.recycle()
-                        made.add(n)
-                    }
+    private fun pdfText(uri: Uri): String {
+        val input = cr.openInputStream(uri) ?: throw IOException("PDF açılamadı")
+        input.use {
+            PDDocument.load(it).use { doc ->
+                val sb = StringBuilder()
+                val stripper = PDFTextStripper().apply { sortByPosition = true }
+                for (p in 1..doc.numberOfPages) {
+                    stripper.startPage = p
+                    stripper.endPage = p
+                    sb.append(stripper.getText(doc).trimEnd()).append("\n\n")
                 }
+                return sb.toString().trim()
             }
         }
-        if (made.isEmpty()) return "PDF'te sayfa bulunamadı."
-        val more = if (total > 30) " (ilk 30 sayfa)" else ""
-        return "${made.size} sayfa resme çevrildi$more: Resimler/D-FON klasörü. Dosya no: ${made.first()}-${made.last()}"
     }
 
     // ---------------- kaydetme & yardımcılar ----------------
 
-    private fun save(name: String, mime: String, folder: String, write: (OutputStream) -> Unit): Pair<Int, AttachedFile> {
+    private fun save(name: String, mime: String, folder: String, write: (OutputStream) -> Unit): Int {
         val cv = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -489,20 +487,12 @@ class FileTools(private val activity: Activity) {
         return cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o2) }
     }
 
-    private fun jpegForAi(uri: Uri): ByteArray {
-        val src = decodeScaled(uri, 3000) ?: throw IOException("Resim açılamadı")
-        val s = minOf(1f, 1568f / maxOf(src.width, src.height))
-        val bmp = if (s < 1f) Bitmap.createScaledBitmap(src, (src.width * s).toInt(), (src.height * s).toInt(), true) else src
-        val out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-        if (bmp !== src) bmp.recycle()
-        src.recycle()
-        return out.toByteArray()
-    }
-
     private fun queryName(uri: Uri): String {
-        cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0)?.let { return it }
+        try {
+            cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0)?.let { return it }
+            }
+        } catch (ignored: Exception) {
         }
         return uri.lastPathSegment ?: "dosya"
     }
@@ -523,46 +513,26 @@ class FileTools(private val activity: Activity) {
             f.mime == "application/pdf" || n.endsWith(".pdf") -> "pdf"
             f.mime.startsWith("image/") -> "resim"
             f.mime == DOCX_MIME || n.endsWith(".docx") -> "word"
-            f.mime == "application/msword" || n.endsWith(".doc") -> "eski-word"
             f.mime.startsWith("text/") || n.endsWith(".txt") || n.endsWith(".md") || n.endsWith(".csv") -> "metin"
-            else -> f.mime
+            else -> "diger"
         }
     }
 
-    private fun firstName(nos: JSONArray?): String? =
-        if (nos == null || nos.length() == 0) null
-        else files.getOrNull(nos.optInt(0) - 1)?.name?.substringBeforeLast('.')
-
-    private fun fileName(given: String, fallback: String?, ext: String): String {
-        val base = given.ifBlank { fallback ?: "D-FON" }
-            .replace(Regex("[\\\\/:*?\"<>|]"), "_").removeSuffix(".$ext").take(60)
-        return "${base}_${stamp()}.$ext"
+    private fun fileName(base: String, ext: String): String {
+        val b = base.ifBlank { "D-FON" }
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_").take(60)
+        return "${b}_${SimpleDateFormat("HHmmss", Locale.US).format(Date())}.$ext"
     }
-
-    private fun stamp() = SimpleDateFormat("HHmmss", Locale.US).format(Date())
 
     private fun xmlEsc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]"), "")
-
-    private fun tool(name: String, desc: String, props: JSONObject, required: List<String>): JSONObject {
-        val schema = JSONObject().put("type", "object").put("properties", props).put("required", JSONArray(required))
-        return JSONObject().put("name", name).put("description", desc).put("input_schema", schema)
-    }
-
-    private fun str(d: String) = JSONObject().put("type", "string").put("description", d)
-    private fun int(d: String) = JSONObject().put("type", "integer").put("description", d)
 
     companion object {
         const val REQ_PICK = 42
         private const val PAGE_W = 595 // A4, 1/72 inç
         private const val PAGE_H = 842
         private const val MARGIN = 50
-        private const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-        private val NAMES = setOf(
-            "uygulamalari_listele", "uygulama_ac", "dosya_sec", "dosyalari_listele", "dosya_ac",
-            "dosya_paylas", "dosya_oku", "pdf_olustur", "word_olustur", "pdf_resme_cevir"
-        )
+        const val DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
         private const val CONTENT_TYPES =
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
@@ -581,7 +551,9 @@ class FileTools(private val activity: Activity) {
         /** Türkçe karakterleri sadeleştirip küçük harfe çevirir (eşleştirme için). */
         fun norm(s: String): String = s.lowercase(Locale("tr"))
             .replace('ı', 'i').replace('ş', 's').replace('ç', 'c')
-            .replace('ğ', 'g').replace('ö', 'o').replace('ü', 'u')
-            .replace(Regex("[^a-z0-9 ]"), "").trim()
+            .replace('ğ', 'g').replace('ö', 'o').replace('ü', 'u').replace('â', 'a').replace('î', 'i')
+            .replace(Regex("[^a-z0-9% ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 }

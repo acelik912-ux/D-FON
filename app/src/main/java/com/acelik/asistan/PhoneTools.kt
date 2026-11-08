@@ -24,7 +24,8 @@ class PhoneTools(private val activity: Activity) {
     private val ctx: Context = activity.applicationContext
     private val audio = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val notif = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    private var torchOn = false
+    var torchOn = false
+        private set
 
     // ---------- Araç tanımları (Claude API "tools" alanı) ----------
 
@@ -82,7 +83,7 @@ class PhoneTools(private val activity: Activity) {
             else -> "Bilinmeyen araç: $name"
         }
     } catch (e: SecurityException) {
-        "İzin hatası: ${e.message}. Kullanıcı üstteki 'İzinler' düğmesinden izinleri vermeli."
+        "İzin hatası: ${e.message}. Üstteki 'İzinler' düğmesinden izinleri ver."
     } catch (e: Exception) {
         "Hata: ${e.javaClass.simpleName}: ${e.message}"
     }
@@ -91,25 +92,24 @@ class PhoneTools(private val activity: Activity) {
     fun hasDndAccess(): Boolean = notif.isNotificationPolicyAccessGranted
 
     fun requestWriteSettings() {
-        activity.startActivity(
-            Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}"))
-        )
+        val i = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}"))
+        activity.onMain { activity.startActivity(i) }
     }
 
     fun requestDndAccess() {
-        activity.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+        activity.onMain { activity.startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
     }
 
     private fun needWrite(): String? {
         if (canWriteSettings()) return null
         requestWriteSettings()
-        return "İzin yok: 'Sistem ayarlarını değiştirme' izni gerekli. İzin ekranını açtım; kullanıcı D-FON için izni açıp geri dönmeli ve komutu tekrar vermeli."
+        return "İzin gerekli: açılan ekranda D-FON için 'Sistem ayarlarını değiştirme' iznini aç, geri dön ve komutu tekrar ver."
     }
 
     private fun needDnd(): String? {
         if (hasDndAccess()) return null
         requestDndAccess()
-        return "İzin yok: 'Rahatsız Etmeyin erişimi' gerekli. İzin ekranını açtım; kullanıcı listede D-FON'ı açıp geri dönmeli ve komutu tekrar vermeli."
+        return "İzin gerekli: açılan listede D-FON'a 'Rahatsız Etmeyin erişimi' ver, geri dön ve komutu tekrar ver."
     }
 
     private fun status(): String {
@@ -218,13 +218,13 @@ class PhoneTools(private val activity: Activity) {
                 if (a == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) {
                     i.data = Uri.parse("package:${ctx.packageName}")
                 }
-                activity.startActivity(i)
-                return "'$key' ekranı açıldı. Kullanıcıya orada neye dokunması gerektiğini kısaca söyle."
+                activity.onMain { activity.startActivity(i) }
+                return "Ayar ekranını açtım."
             } catch (ignored: Exception) {
                 // bu telefonda yok, sıradakini dene
             }
         }
-        return "'$key' ekranı bu telefonda açılamadı."
+        return "Bu ayar ekranı telefonunda açılamadı."
     }
 
     // ---------- yardımcılar ----------

@@ -47,3 +47,8 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    // PDF'ten yazı çıkarma ve PDF birleştirme (açık kaynak, telefonda çalışır)
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+}

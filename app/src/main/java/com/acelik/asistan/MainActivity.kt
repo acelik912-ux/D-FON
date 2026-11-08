@@ -3,63 +3,60 @@ package com.acelik.asistan
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
-import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.os.Looper
 import android.speech.RecognizerIntent
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import org.json.JSONArray
-import org.json.JSONObject
-import java.util.concurrent.CountDownLatch
+import android.view.ViewGroup
 
 class MainActivity : Activity() {
 
-    private lateinit var tools: PhoneTools
+    private lateinit var phone: PhoneTools
     private lateinit var files: FileTools
+    private lateinit var engine: CommandEngine
+
     private lateinit var chat: LinearLayout
     private lateinit var scroll: ScrollView
     private lateinit var input: EditText
     private lateinit var sendBtn: Button
     private lateinit var permBtn: Button
 
-    private val history = mutableListOf<JSONObject>()
     private var busy = false
-    private val unannounced = mutableListOf<String>()
-    private var autoMessage: String? = null
-
-    private val prefs by lazy { getSharedPreferences("asistan", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        tools = PhoneTools(this)
+        phone = PhoneTools(this)
         files = FileTools(this)
+        engine = CommandEngine(phone, files)
         window.statusBarColor = BG
         window.navigationBarColor = BG
         setContentView(buildUi())
 
         addBubble(
-            "Merhaba! Telefon ayarlarını benim üzerimden değiştirebilirsin. " +
-                "Uygulamaları açabilir, dosyalarını PDF/Word'e çevirebilirim. " +
-                "Yaz ya da 🎤'ya basıp söyle; dosya eklemek için 📎.\n\nÖrnek: \"Parlaklığı %30 yap\", " +
-                "\"WhatsApp'ı aç\", \"Bu PDF'i Word'e çevir\", \"Fotoğraflarımdan PDF yap\".",
+            "Merhaba! Ben D-FON. Tamamen telefonunda çalışırım: internete bağlanmam, ücret istemem, " +
+                "kimseye veri göndermem.\n\nYaz ya da 🎤'ya basıp söyle. Ne yapabildiğimi görmek için \"yardım\" yaz.",
             Who.BOT
         )
-        if (apiKey().isBlank()) {
-            addBubble("Başlamadan önce ⚙ düğmesine basıp Claude API anahtarını gir.", Who.INFO)
+        if (files.allowedPackages().isEmpty()) {
+            addBubble("Açabileceğim uygulamaları seçmek için üstteki \"Uygulamalar\" düğmesine bas.", Who.INFO)
         }
     }
 
@@ -77,7 +74,6 @@ class MainActivity : Activity() {
             fitsSystemWindows = true
         }
 
-        // Üst çubuk
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -91,11 +87,10 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         permBtn = smallButton("İzinler") { showPermissions() }
         top.addView(permBtn)
-        top.addView(smallButton("Yeni") { newChat() })
-        top.addView(smallButton("⚙") { showSettings() })
+        top.addView(smallButton("Uygulamalar") { showAppPicker() })
+        top.addView(smallButton("Temizle") { clearChat() })
         root.addView(top)
 
-        // Sohbet alanı
         chat = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(4), dp(12), dp(12))
@@ -103,14 +98,11 @@ class MainActivity : Activity() {
         scroll = ScrollView(this).apply { addView(chat) }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Hızlı komutlar
         val chips = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
         listOf(
-            "Parlaklığı %30 yap", "Feneri aç", "Feneri kapat", "Titreşime al",
-            "Rahatsız etmeyi aç", "Medya sesini %50 yap", "Ekran 2 dakikada kapansın",
-            "Wi-Fi ayarlarını aç", "Karanlık mod", "Durumu söyle",
-            "PDF'i Word'e çevir", "Word'ü PDF yap", "Resimlerden PDF yap", "PDF'i özetle",
-            "PDF'i resme çevir", "Word'ü aç", "Hangi uygulamalar var?"
+            "Yardım", "Durum", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
+            "Gece modu", "Medya sesi 50", "PDF'i Word'e çevir", "Word'ü PDF yap", "Resimleri PDF yap",
+            "PDF'leri birleştir", "PDF'i resme çevir", "Dosyayı aç", "Wi-Fi", "Karanlık mod", "Uygulamalar"
         ).forEach { cmd ->
             chips.addView(TextView(this).apply {
                 text = cmd
@@ -126,7 +118,6 @@ class MainActivity : Activity() {
             addView(chips)
         })
 
-        // Giriş satırı
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -136,7 +127,7 @@ class MainActivity : Activity() {
             text = "📎"
             textSize = 18f
             background = rounded(CHIP, 24)
-            setOnClickListener { if (!busy) files.pick("hepsi", true, false) }
+            setOnClickListener { if (!busy) files.pick("hepsi", true) }
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { setMargins(0, 0, dp(4), 0) })
         bar.addView(Button(this).apply {
             text = "🎤"
@@ -168,18 +159,17 @@ class MainActivity : Activity() {
         return root
     }
 
-    private enum class Who { USER, BOT, ACTION, INFO }
+    private enum class Who { USER, BOT, INFO }
 
     private fun addBubble(text: String, who: Who) {
         val tv = TextView(this).apply {
             this.text = text
-            textSize = if (who == Who.ACTION) 13f else 15.5f
+            textSize = 15.5f
             setTextIsSelectable(true)
             setPadding(dp(14), dp(10), dp(14), dp(10))
             when (who) {
                 Who.USER -> { setTextColor(Color.BLACK); background = rounded(ACCENT, 16) }
                 Who.BOT -> { setTextColor(Color.WHITE); background = rounded(BUBBLE, 16) }
-                Who.ACTION -> { setTextColor(0xFF9FE2BF.toInt()); background = rounded(0xFF15283A.toInt(), 12) }
                 Who.INFO -> { setTextColor(0xFFFFB4A2.toInt()); background = rounded(0xFF3A1F24.toInt(), 12) }
             }
         }
@@ -197,141 +187,39 @@ class MainActivity : Activity() {
         sendBtn.text = if (b) "…" else "Gönder"
     }
 
-    // ---------------- Sohbet döngüsü ----------------
+    // ---------------- Komut çalıştırma ----------------
 
     private fun submit(raw: String) {
         val text = raw.trim()
         if (text.isEmpty() || busy) return
-        if (apiKey().isBlank()) { showSettings(); return }
         input.setText("")
         addBubble(text, Who.USER)
+        runInBackground { engine.handle(text) }
+    }
+
+    /** Dosya dönüştürme gibi uzun işler arayüzü dondurmasın diye arka planda çalışır. */
+    private fun runInBackground(work: () -> List<String>) {
         setBusy(true)
-
-        val snapshot = history.size
-        val announced = unannounced.toList()
-        unannounced.clear()
-        val content = if (announced.isEmpty()) text
-            else "[Yeni eklenen dosyalar: ${announced.joinToString(", ")}]\n$text"
-        history.add(JSONObject().put("role", "user").put("content", content))
-        trimHistory()
-        val client = ClaudeClient(apiKey(), model())
-        val defs = tools.definitions()
-        val fdefs = files.definitions()
-        for (k in 0 until fdefs.length()) defs.put(fdefs.get(k))
-
         Thread {
-            try {
-                var rounds = 0
-                while (rounds++ < 8) {
-                    val resp = client.send(SYSTEM_PROMPT, JSONArray(history), defs)
-                    val content = resp.getJSONArray("content")
-                    history.add(JSONObject().put("role", "assistant").put("content", content))
-
-                    val results = JSONArray()
-                    for (i in 0 until content.length()) {
-                        val block = content.getJSONObject(i)
-                        when (block.optString("type")) {
-                            "text" -> {
-                                val t = block.optString("text").trim()
-                                if (t.isNotEmpty()) runOnUiThread { addBubble(t, Who.BOT) }
-                            }
-                            "tool_use" -> {
-                                val name = block.getString("name")
-                                val args = block.optJSONObject("input") ?: JSONObject()
-                                val out: ToolOutput = onMain {
-                                    if (files.has(name)) files.run(name, args) else ToolOutput(tools.run(name, args))
-                                }
-                                if (name != "durum_oku" && name != "dosya_oku" && name != "dosyalari_listele") {
-                                    runOnUiThread { addBubble("⚙ ${out.text}", Who.ACTION) }
-                                }
-                                val resultContent: Any = if (out.blocks == null) out.text else {
-                                    val arr = JSONArray().put(JSONObject().put("type", "text").put("text", out.text))
-                                    for (k in 0 until out.blocks.length()) arr.put(out.blocks.get(k))
-                                    arr
-                                }
-                                results.put(
-                                    JSONObject().put("type", "tool_result")
-                                        .put("tool_use_id", block.getString("id"))
-                                        .put("content", resultContent)
-                                )
-                            }
-                        }
-                    }
-                    if (resp.optString("stop_reason") != "tool_use" || results.length() == 0) break
-                    history.add(JSONObject().put("role", "user").put("content", results))
-                }
-                runOnUiThread { stripHeavyContent() }
+            val replies = try {
+                work()
             } catch (e: Exception) {
-                // Yarım kalan turu geri al ki sohbet bozulmasın
-                runOnUiThread {
-                    while (history.size > snapshot) history.removeAt(history.size - 1)
-                    addBubble(e.message ?: e.toString(), Who.INFO)
-                }
-            } finally {
-                runOnUiThread {
-                    setBusy(false)
-                    refreshPermButton()
-                    autoMessage?.let { autoMessage = null; submit(it) }
-                }
+                listOf("Hata: ${e.message ?: e.javaClass.simpleName}")
+            }
+            runOnUiThread {
+                replies.forEach { addBubble(it, Who.BOT) }
+                setBusy(false)
+                refreshPermButton()
             }
         }.start()
     }
 
-    /**
-     * Okunan PDF/resim içeriği her istekte tekrar gönderilmesin (pahalı olur):
-     * tur bitince bunları kısa bir nota çevir.
-     */
-    private fun stripHeavyContent() {
-        for (msg in history) {
-            val c = msg.opt("content") as? JSONArray ?: continue
-            for (i in 0 until c.length()) {
-                val block = c.optJSONObject(i) ?: continue
-                if (block.optString("type") != "tool_result") continue
-                val inner = block.opt("content") as? JSONArray ?: continue
-                val kept = JSONArray()
-                for (k in 0 until inner.length()) {
-                    val b = inner.getJSONObject(k)
-                    if (b.optString("type") == "text") kept.put(b)
-                    else kept.put(JSONObject().put("type", "text")
-                        .put("text", "[Bu içerik daha önce okundu; gerekirse dosya_oku ile tekrar oku.]"))
-                }
-                block.put("content", kept)
-            }
-        }
-    }
-
-    /** Sohbet çok uzarsa en eski turları at (her zaman düz bir kullanıcı mesajıyla başlasın). */
-    private fun trimHistory() {
-        if (history.size <= 40) return
-        while (history.size > 20) history.removeAt(0)
-        while (history.isNotEmpty() &&
-            !(history[0].optString("role") == "user" && history[0].opt("content") is String)
-        ) history.removeAt(0)
-    }
-
-    private fun <T> onMain(block: () -> T): T {
-        if (Looper.myLooper() == Looper.getMainLooper()) return block()
-        val latch = CountDownLatch(1)
-        var result: Result<T>? = null
-        runOnUiThread {
-            result = runCatching(block)
-            latch.countDown()
-        }
-        latch.await()
-        return result!!.getOrThrow()
-    }
-
-    private fun queueOrSubmit(msg: String) {
-        if (busy) autoMessage = msg else submit(msg)
-    }
-
-    private fun newChat() {
+    private fun clearChat() {
         if (busy) return
-        history.clear()
+        engine.reset()
         files.files.clear()
-        unannounced.clear()
         chat.removeAllViews()
-        addBubble("Yeni sohbet. Ne yapayım?", Who.BOT)
+        addBubble("Temizlendi. Ne yapayım?", Who.BOT)
     }
 
     // ---------------- Ses ----------------
@@ -340,12 +228,13 @@ class MainActivity : Activity() {
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "tr-TR")
+            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             .putExtra(RecognizerIntent.EXTRA_PROMPT, "Ne yapayım?")
         try {
             @Suppress("DEPRECATION")
             startActivityForResult(i, REQ_VOICE)
-        } catch (ignored: ActivityNotFoundException) {
-            Toast.makeText(this, "Bu telefonda ses tanıma bulunamadı (Google uygulaması gerekli).", Toast.LENGTH_LONG).show()
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Bu telefonda ses tanıma bulunamadı.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -358,60 +247,102 @@ class MainActivity : Activity() {
             if (!said.isNullOrBlank()) submit(said)
         }
         if (requestCode == FileTools.REQ_PICK) {
-            val byAi = files.pickRequestedByAi
-            files.pickRequestedByAi = false
-            val added = if (resultCode == RESULT_OK) files.handlePick(data) else emptyList()
-            if (added.isEmpty()) {
-                if (byAi) queueOrSubmit("Dosya seçmekten vazgeçtim.")
-                return
-            }
-            val names = added.map { (no, f) -> "$no) ${f.name}" }
-            unannounced.addAll(names)
-            addBubble("📎 " + names.joinToString("\n"), Who.ACTION)
-            if (byAi) queueOrSubmit("Dosyaları seçtim, devam et.")
+            val picked = if (resultCode == RESULT_OK) files.handlePick(data) else emptyList()
+            runInBackground { engine.onFilesPicked(picked) }
         }
     }
 
-    // ---------------- Ayarlar & izinler ----------------
+    // ---------------- Uygulama seçimi ----------------
 
-    private fun apiKey() = prefs.getString("key", "") ?: ""
-    private fun model() = (prefs.getString("model", "") ?: "").ifBlank { DEFAULT_MODEL }
+    private fun showAppPicker() {
+        val apps = files.installedApps()
+        val selected = HashSet(files.allowedPackages())
+        var shown = apps
 
-    private fun showSettings() {
+        val adapter = object : BaseAdapter() {
+            override fun getCount() = shown.size
+            override fun getItem(position: Int) = shown[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val cb = (convertView as? CheckBox) ?: CheckBox(this@MainActivity).apply {
+                    setPadding(dp(8), dp(10), dp(8), dp(10))
+                    textSize = 16f
+                    isClickable = false
+                    isFocusable = false
+                }
+                val app = shown[position]
+                cb.text = app.label
+                cb.isChecked = app.pkg in selected
+                return cb
+            }
+        }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
+            setPadding(dp(16), dp(4), dp(16), 0)
         }
-        val key = EditText(this).apply {
-            hint = "sk-ant-..."
-            setText(apiKey())
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val info = TextView(this).apply {
+            textSize = 13f
+            setPadding(0, 0, 0, dp(6))
         }
-        val mdl = EditText(this).apply {
-            hint = DEFAULT_MODEL
-            setText(prefs.getString("model", ""))
+        fun refreshInfo() { info.text = "D-FON sadece işaretlediğin ${selected.size} uygulamayı açabilir ve dosya gönderebilir." }
+        refreshInfo()
+        val search = EditText(this).apply { hint = "Ara…" }
+        val list = ListView(this).apply {
+            this.adapter = adapter
+            setOnItemClickListener { _, _, pos, _ ->
+                val p = shown[pos].pkg
+                if (!selected.remove(p)) selected.add(p)
+                adapter.notifyDataSetChanged()
+                refreshInfo()
+            }
         }
-        box.addView(label("Claude API anahtarı (console.anthropic.com)"))
-        box.addView(key)
-        box.addView(label("Model (boş bırakırsan: $DEFAULT_MODEL)"))
-        box.addView(mdl)
-        AlertDialog.Builder(this)
-            .setTitle("Ayarlar")
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val q = FileTools.norm(s?.toString() ?: "")
+                shown = if (q.isEmpty()) apps else apps.filter { FileTools.norm(it.label).contains(q) }
+                adapter.notifyDataSetChanged()
+            }
+        })
+        box.addView(info)
+        box.addView(search)
+        box.addView(list, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55).toInt()))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Kullanılabilecek uygulamalar")
             .setView(box)
             .setPositiveButton("Kaydet") { _, _ ->
-                prefs.edit()
-                    .putString("key", key.text.toString().trim())
-                    .putString("model", mdl.text.toString().trim())
-                    .apply()
-                Toast.makeText(this, "Kaydedildi", Toast.LENGTH_SHORT).show()
+                files.setAllowedPackages(selected)
+                Toast.makeText(this, "${selected.size} uygulama izinli", Toast.LENGTH_SHORT).show()
             }
+            .setNeutralButton("Hepsini seç", null)
             .setNegativeButton("İptal", null)
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            // "Hepsini seç / Hiçbiri" diyaloğu kapatmadan çalışsın
+            val b = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            b.setOnClickListener {
+                if (selected.containsAll(shown.map { it.pkg })) {
+                    selected.removeAll(shown.map { it.pkg }.toSet())
+                    b.text = "Hepsini seç"
+                } else {
+                    selected.addAll(shown.map { it.pkg })
+                    b.text = "Hiçbiri"
+                }
+                adapter.notifyDataSetChanged()
+                refreshInfo()
+            }
+        }
+        dialog.show()
     }
 
+    // ---------------- İzinler ----------------
+
     private fun showPermissions() {
-        val w = tools.canWriteSettings()
-        val d = tools.hasDndAccess()
+        val w = phone.canWriteSettings()
+        val d = phone.hasDndAccess()
         AlertDialog.Builder(this)
             .setTitle("İzinler")
             .setMessage(
@@ -419,17 +350,17 @@ class MainActivity : Activity() {
                     "   (parlaklık, ekran zaman aşımı, döndürme)\n\n" +
                     "${if (d) "✅" else "❌"} Rahatsız Etmeyin erişimi\n" +
                     "   (sessiz mod, rahatsız etmeyin)\n\n" +
-                    "Açılan ekranda D-FON'ı bulup izni aç, sonra geri dön."
+                    "Açılan ekranda D-FON'u bulup izni aç, sonra geri dön."
             )
-            .setPositiveButton("Sistem ayarları izni") { _, _ -> tools.requestWriteSettings() }
-            .setNeutralButton("Rahatsız etmeyin izni") { _, _ -> tools.requestDndAccess() }
+            .setPositiveButton("Sistem ayarları izni") { _, _ -> phone.requestWriteSettings() }
+            .setNeutralButton("Rahatsız etmeyin izni") { _, _ -> phone.requestDndAccess() }
             .setNegativeButton("Kapat", null)
             .show()
     }
 
     private fun refreshPermButton() {
         if (!::permBtn.isInitialized) return
-        val ok = tools.canWriteSettings() && tools.hasDndAccess()
+        val ok = phone.canWriteSettings() && phone.hasDndAccess()
         permBtn.text = if (ok) "İzinler ✓" else "İzinler !"
     }
 
@@ -446,56 +377,20 @@ class MainActivity : Activity() {
         text = t
         isAllCaps = false
         setTextColor(Color.WHITE)
+        textSize = 13f
         background = rounded(CHIP, 16)
         minWidth = 0
         minimumWidth = 0
-        setPadding(dp(12), 0, dp(12), 0)
+        setPadding(dp(10), 0, dp(10), 0)
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply { setMargins(dp(4), 0, dp(4), 0) }
-    }
-
-    private fun label(t: String) = TextView(this).apply {
-        text = t
-        textSize = 13f
-        setPadding(0, dp(12), 0, 0)
+        layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply { setMargins(dp(3), 0, dp(3), 0) }
     }
 
     companion object {
         private const val REQ_VOICE = 41
-        private const val DEFAULT_MODEL = "claude-haiku-5-5"
-
         private val BG = 0xFF0F1A2A.toInt()
         private val BUBBLE = 0xFF1F3A5F.toInt()
         private val CHIP = 0xFF22324A.toInt()
         private val ACCENT = 0xFFFFD166.toInt()
-
-        private const val SYSTEM_PROMPT = """
-Sen kullanıcının Android telefonunda çalışan kişisel asistansın. Adın "D-FON".
-Kullanıcı Türkçe konuşur; samimi Türkçe cevap ver. Ayar ve dosya işlemlerinde kısa ol (1-2 cümle);
-özet, çeviri gibi isteklerde gerektiği kadar yaz.
-
-Görevin, kullanıcının söylediği telefon ayarlarını araçlarla değiştirmek:
-- Doğrudan değiştirebildiklerin: parlaklık, otomatik parlaklık, ekran zaman aşımı, otomatik döndürme,
-  ses seviyeleri, zil modu, Rahatsız Etmeyin, fener.
-- Android'in uygulamalara doğrudan değiştirtmediği ayarlar (Wi-Fi, Bluetooth, mobil veri, karanlık mod,
-  yazı boyutu, duvar kağıdı, uçak modu, hotspot vb.) için ayar_ekrani_ac ile ilgili ekranı aç ve
-  kullanıcıya orada hangi düğmeye dokunacağını tek cümleyle söyle.
-- "Biraz artır", "azalt", "yarıya indir" gibi göreceli isteklerde önce durum_oku çağır.
-- Bir araç "İzin yok" derse, kullanıcıya açılan ekranda D-FON'ın iznini açmasını ve komutu tekrar vermesini söyle.
-- Birden fazla istek varsa hepsini yap ("gece moduna geç" → parlaklığı düşür + titreşime al gibi mantıklı yorumla).
-
-Uygulamalar ve dosyalar:
-- Kullanıcı bir uygulamayı açmak isterse uygulama_ac kullan. Emin değilsen uygulamalari_listele ile ara.
-- Dosyalar numarayla anılır (1, 2, 3...). Kullanıcının mesajında "[Yeni eklenen dosyalar: ...]" görürsen
-  o dosyalar hazırdır. İşlem için dosya yoksa dosya_sec ile kullanıcıdan iste ve seçmesini bekle.
-- Word → PDF ve resim → PDF: pdf_olustur(dosya_nolari).
-- PDF → Word: önce dosya_oku, sonra içeriği (başlıkları "# " ile) word_olustur'a yaz.
-- PDF'i özetleme/çeviri/soru: dosya_oku ile oku, sonra cevapla; istenirse sonucu PDF ya da Word yap.
-- PDF → resim: pdf_resme_cevir.
-- Oluşan dosyayı açmak/paylaşmak için dosya_ac / dosya_paylas (uygulama adı verilebilir, ör. "Word", "WhatsApp").
-- Dönüştürmede yazı aktarılır; tablo, resim gibi karmaşık biçimler kaybolabilir — gerekirse bunu kısaca belirt.
-- Telefon ve dosyalarla ilgili olmayan sorulara da kısaca yardımcı olabilirsin.
-Yaptığın değişikliği abartmadan, kısaca onayla.
-"""
     }
 }
