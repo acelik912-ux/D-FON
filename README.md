@@ -24,18 +24,20 @@ Uygulamada `yardım` yazınca tam liste çıkar. Örnekler:
 | Ekran | "parlaklık 40", "ekranı karart", "ekran 2 dakikada kapansın" |
 | Ses | "medya sesi 50", "sessize al", "titreşime al", "rahatsız etmeyi aç" |
 | Diğer | "feneri aç", "gece modu", "durum" |
+| Saat | "alarm 7:30", "sabah 6'da uyandır", "5 dakika zamanlayıcı", "alarmları göster", "saat kaç", "bugün günlerden ne" |
 | Ayar ekranları | "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu" |
 | Uygulamalar | "WhatsApp'ı aç" (sadece izinli olanlar) |
 | Dosyalar | "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir" |
 | Yazıdan belge | "PDF yap: …", "Word yap: …" |
 | İnternet | "hava durumu ara", "YouTube'da … izle", "trt.net.tr" |
 
-Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al".
+Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al". Son 20 komut "🕘 Geçmiş" düğmesinde durur.
 
 Çıktılar `İndirilenler/D-FON` ve `Resimler/D-FON` klasörlerine kaydedilir. Gereksinim: Android 10+.
 
 ## Kod
 - `CommandEngine.kt` — Türkçe komutları anlayan kural motoru (yeni komut buraya eklenir)
 - `PhoneTools.kt` — telefon ayarları
+- `ClockTools.kt` — alarm, zamanlayıcı, saat ve tarih
 - `FileTools.kt` — uygulamalar, dosyalar, PDF/Word dönüştürme (PdfBox-Android)
 - `MainActivity.kt` — ekran, sesli komut, uygulama seçimi

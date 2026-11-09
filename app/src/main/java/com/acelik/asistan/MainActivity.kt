@@ -25,6 +25,7 @@ import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
 import android.view.ViewGroup
 
 class MainActivity : Activity() {
@@ -45,7 +46,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         phone = PhoneTools(this)
         files = FileTools(this)
-        engine = CommandEngine(phone, files)
+        engine = CommandEngine(phone, files, ClockTools(this))
         window.statusBarColor = BG
         window.navigationBarColor = BG
         setContentView(buildUi())
@@ -99,8 +100,16 @@ class MainActivity : Activity() {
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val chips = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
+        chips.addView(TextView(this).apply {
+            text = "🕘 Geçmiş"
+            setTextColor(Color.BLACK)
+            textSize = 13f
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = rounded(ACCENT, 18)
+            setOnClickListener { showHistory() }
+        }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
         listOf(
-            "Yardım", "Durum", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
+            "Yardım", "Durum", "Saat kaç", "5 dakika zamanlayıcı", "Alarmları göster", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
             "Gece modu", "Medya sesi 50", "PDF'i Word'e çevir", "Word'ü PDF yap", "Resimleri PDF yap",
             "PDF'leri birleştir", "PDF'i resme çevir", "Dosyayı aç", "Wi-Fi", "Karanlık mod", "Uygulamalar"
         ).forEach { cmd ->
@@ -193,6 +202,7 @@ class MainActivity : Activity() {
         val text = raw.trim()
         if (text.isEmpty() || busy) return
         input.setText("")
+        remember(text)
         addBubble(text, Who.USER)
         runInBackground { engine.handle(text) }
     }
@@ -220,6 +230,46 @@ class MainActivity : Activity() {
         files.files.clear()
         chat.removeAllViews()
         addBubble("Temizlendi. Ne yapayım?", Who.BOT)
+    }
+
+    // ---------------- Komut geçmişi ----------------
+
+    private fun history(): List<String> {
+        val raw = getSharedPreferences("dfon", MODE_PRIVATE).getString("gecmis", null) ?: return emptyList()
+        return try {
+            val a = JSONArray(raw)
+            (0 until a.length()).map { a.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun remember(cmd: String) {
+        val list = (listOf(cmd) + history().filter { it != cmd }).take(HISTORY_MAX)
+        getSharedPreferences("dfon", MODE_PRIVATE).edit()
+            .putString("gecmis", JSONArray(list).toString())
+            .apply()
+    }
+
+    private fun showHistory() {
+        val list = history()
+        if (list.isEmpty()) {
+            Toast.makeText(this, "Henüz komut geçmişi yok.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Son komutlar")
+            .setItems(list.toTypedArray()) { _, which ->
+                input.setText(list[which])
+                input.setSelection(input.text.length)
+                input.requestFocus()
+            }
+            .setNeutralButton("Geçmişi sil") { _, _ ->
+                getSharedPreferences("dfon", MODE_PRIVATE).edit().remove("gecmis").apply()
+                Toast.makeText(this, "Geçmiş silindi.", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
     }
 
     // ---------------- Ses ----------------
@@ -388,6 +438,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_VOICE = 41
+        private const val HISTORY_MAX = 20
         private val BG = 0xFF0F1A2A.toInt()
         private val BUBBLE = 0xFF1F3A5F.toInt()
         private val CHIP = 0xFF22324A.toInt()

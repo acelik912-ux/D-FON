@@ -7,7 +7,11 @@ import java.net.URLEncoder
  * Türkçe komutları anlayan, tamamen telefonda çalışan motor.
  * Yapay zekaya ya da internete bağlanmaz; anahtar kelime ve kurallarla çalışır.
  */
-class CommandEngine(private val phone: PhoneTools, private val files: FileTools) {
+class CommandEngine(
+    private val phone: PhoneTools,
+    private val files: FileTools,
+    private val clock: ClockTools
+) {
 
     enum class Action { PDF_TO_WORD, WORD_TO_PDF, IMAGES_TO_PDF, PDF_TO_IMAGES, MERGE_PDF }
 
@@ -64,6 +68,8 @@ class CommandEngine(private val phone: PhoneTools, private val files: FileTools)
 
     private fun single(t: String): String? {
         status(t)?.let { return it }
+        dateTime(t)?.let { return it }
+        clockCommand(t)?.let { return it }
         if (tokens(t).any { it.startsWith("ayarlar") || it.startsWith("ayari") || it.startsWith("ayarin") }) {
             settingsScreen(t)?.let { return it }
         }
@@ -82,6 +88,81 @@ class CommandEngine(private val phone: PhoneTools, private val files: FileTools)
 
     private fun unknown(t: String) =
         "\"$t\" komutunu anlayamadım. Neler yapabildiğimi görmek için \"yardım\" yaz."
+
+    // ---------------- saat, alarm, zamanlayıcı ----------------
+
+    private fun dateTime(t: String): String? {
+        if (has(t, "ayar", "alarm")) return null
+        if (has(t, "saat kac", "saati soyle", "saat ne")) return clock.now()
+        if (has(t, "bugun gunlerden", "hangi gun", "bugunun tarihi", "tarih ne", "bugun ne", "gunlerden ne", "ayin kaci"))
+            return clock.today()
+        return null
+    }
+
+    private fun clockCommand(t: String): String? {
+        val tk = tokens(t)
+        if (has(t, "zamanlayici", "sayac", "geri sayim")) {
+            val sec = durationSeconds(t)
+            if (sec == null) {
+                if (number(t) == null) return clock.showTimers()
+                return "Ne kadar süre? Örn: \"5 dakika zamanlayıcı\", \"1 saat 20 dakika sayaç kur\"."
+            }
+            return clock.setTimer(sec.coerceIn(1, 86400), "D-FON")
+        }
+        val alarmWord = has(t, "alarm") || tk.any { it.startsWith("uyandir") }
+        if (!alarmWord) return null
+        // "alarm sesi 50" ses komutudur
+        if (tk.any { it.startsWith("ses") && !it.startsWith("sessiz") }) return null
+        if (has(t, "alarmlar", "goster", "listele") && number(t) == null) return clock.showAlarms()
+
+        val clockTime = Regex("\\b(\\d{1,2}) (\\d{2})\\b").containsMatchIn(t) ||
+            Regex("\\bsaat (\\d|$NUM_RE)").containsMatchIn(t)
+        val dur = durationSeconds(t)
+        if (dur != null && !clockTime) return clock.setTimer(dur.coerceIn(1, 86400), "D-FON") // "10 dakika sonra alarm"
+
+        val hm = alarmTime(t)
+            ?: return "Alarm saat kaçta? Örn: \"alarm 7:30\", \"sabah 6'da uyandır\", \"akşam 9 buçukta alarm kur\"."
+        return clock.setAlarm(hm.first, hm.second, "D-FON")
+    }
+
+    /** "1 saat 20 dakika", "yirmi beş dakika", "yarım saat", "1 buçuk saat" -> saniye */
+    private fun durationSeconds(t: String): Int? {
+        var total = 0
+        var found = false
+        Regex("\\b((?:(?:\\d+|$NUM_RE)\\s*)+?)\\s*(bucuk\\s*)?(saat|dakika|dk|saniye|sn)\\b").findAll(t).forEach { m ->
+            val n = number(m.groupValues[1]) ?: return@forEach
+            val unit = when (m.groupValues[3]) {
+                "saat" -> 3600
+                "dakika", "dk" -> 60
+                else -> 1
+            }
+            total += n * unit + (if (m.groupValues[2].isNotEmpty()) unit / 2 else 0)
+            found = true
+        }
+        if (has(t, "yarim saat")) { total += 1800; found = true }
+        if (has(t, "yarim dakika")) { total += 30; found = true }
+        return if (found && total > 0) total else null
+    }
+
+    private fun alarmTime(t: String): Pair<Int, Int>? {
+        var h: Int
+        var m = 0
+        val hm = Regex("\\b(\\d{1,2}) (\\d{2})\\b").find(t)
+        if (hm != null) {
+            h = hm.groupValues[1].toInt()
+            m = hm.groupValues[2].toInt()
+        } else {
+            val digit = Regex("\\b(\\d{1,2})\\b").find(t)?.groupValues?.get(1)?.toInt()
+            val word = Regex("\\bsaat ((?:$NUM_RE)(?: (?:$NUM_RE))?)\\b").find(t)?.groupValues?.get(1)?.let { number(it) }
+            h = digit ?: word ?: return null
+            if (has(t, "bucuk")) m = 30
+        }
+        if (h !in 0..23 || m !in 0..59) return null
+        if (has(t, "aksam", "ogleden sonra", "ikindi") && h in 1..11) h += 12
+        if (has(t, "gece") && h == 12) h = 0
+        if (has(t, "gece") && h in 8..11) h += 12
+        return h to m
+    }
 
     // ---------------- telefon ----------------
 
@@ -449,6 +530,8 @@ class CommandEngine(private val phone: PhoneTools, private val files: FileTools)
             "elli" to 50, "altmis" to 60, "yetmis" to 70, "seksen" to 80, "doksan" to 90, "yuz" to 100
         )
 
+        private val NUM_RE = NUM_WORDS.keys.joinToString("|")
+
         private val SCREENS = listOf(
             Screen(listOf("wifi", "wi fi", "kablosuz"), "wifi", true),
             Screen(listOf("bluetooth", "blutut"), "bluetooth", true),
@@ -480,6 +563,7 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 ☀ Ekran: "parlaklık 40", "parlaklığı artır", "ekranı karart", "otomatik parlaklığı aç", "ekran 2 dakikada kapansın", "otomatik döndürmeyi kapat"
 🔊 Ses: "medya sesi 50", "zil sesini artır", "sesi kapat", "sessize al", "titreşime al", "sessizden çık", "rahatsız etmeyi aç"
 🔦 "feneri aç", "gece modu", "gündüz modu", "durum" (pil ve ayarlar)
+⏰ Saat: "alarm 7:30", "sabah 6'da uyandır", "akşam 9 buçukta alarm kur", "5 dakika zamanlayıcı", "1 saat 20 dakika sayaç kur", "alarmları göster", "saat kaç", "bugün günlerden ne"
 ⚙ Ayar ekranları: "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu", "duvar kağıdı", "konum", "uçak modu"…
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)
 📄 Dosyalar: "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir", "dosyayı aç", "dosyayı WhatsApp'tan gönder"
@@ -487,6 +571,7 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 🌐 İnternet (tarayıcıda açılır): "hava durumu ara", "YouTube'da Kuran tilaveti izle", "Vikipedi'de Osmanlı ara", "trt.net.tr"
 
 Birden fazla komutu "ve" ile birleştirebilirsin: "parlaklık 20 ve sessize al".
+Son komutlarını tekrar kullanmak için alttaki "🕘 Geçmiş" düğmesine bas.
 """.trim()
     }
 }
