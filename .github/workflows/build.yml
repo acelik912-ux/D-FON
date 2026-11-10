@@ -29,11 +29,6 @@ jobs:
       - name: APK'yı adlandır
         run: cp app/build/outputs/apk/release/app-release.apk D-FON.apk
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: D-FON-apk
-          path: D-FON.apk
-
       - name: Sürüm yayınla
         uses: softprops/action-gh-release@v2
         with:
