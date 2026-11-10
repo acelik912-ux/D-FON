@@ -109,7 +109,8 @@ class MainActivity : Activity() {
             setOnClickListener { showHistory() }
         }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
         listOf(
-            "Yardım", "Durum", "Saat kaç", "5 dakika zamanlayıcı", "Alarmları göster", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
+            "Yardım", "Durum", "PDF'i oku", "Word'ü oku", "Ekrandaki yazıyı oku", "Dur",
+            "Saat kaç", "5 dakika zamanlayıcı", "Alarmları göster", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
             "Gece modu", "Medya sesi 50", "PDF'i Word'e çevir", "Word'ü PDF yap", "Resimleri PDF yap",
             "PDF'leri birleştir", "PDF'i resme çevir", "Dosyayı aç", "Wi-Fi", "Karanlık mod", "Uygulamalar"
         ).forEach { cmd ->

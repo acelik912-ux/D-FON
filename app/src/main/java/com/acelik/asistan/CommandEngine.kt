@@ -13,7 +13,7 @@ class CommandEngine(
     private val clock: ClockTools
 ) {
 
-    enum class Action { PDF_TO_WORD, WORD_TO_PDF, IMAGES_TO_PDF, PDF_TO_IMAGES, MERGE_PDF }
+    enum class Action { PDF_TO_WORD, WORD_TO_PDF, IMAGES_TO_PDF, PDF_TO_IMAGES, MERGE_PDF, READ }
 
     /** Dosya seçilince yapılacak işlem. */
     private var pending: Action? = null
@@ -33,7 +33,9 @@ class CommandEngine(
 
         if (has(t, "yardim", "neler yapabilirsin", "ne yapabilirsin", "komutlar")) return listOf(HELP)
 
+        stopReading(t)?.let { return listOf(it) }
         textToDocument(text)?.let { return listOf(it) }
+        readCommand(t)?.let { return listOf(it) }
         webCommand(text)?.let { return listOf(it) }
         fileCommand(t)?.let { return listOf(it) }
 
@@ -88,6 +90,54 @@ class CommandEngine(
 
     private fun unknown(t: String) =
         "\"$t\" komutunu anlayamadım. Neler yapabildiğimi görmek için \"yardım\" yaz."
+
+    // ---------------- sesli okuma ----------------
+
+    private fun stopReading(t: String): String? {
+        val tk = tokens(t)
+        val stopWord = tk.size <= 2 && tk.any { it in setOf("dur", "durdur", "sus", "yeter", "kes") }
+        if (stopWord || has(t, "okumayi durdur", "okumayi kes", "okumayi birak", "sesli okumayi kapat", "okumayi kapat")) {
+            Speaker.stop()
+            return "Okuma durduruldu."
+        }
+        return null
+    }
+
+    private fun readCommand(t: String): String? {
+        val tk = tokens(t)
+        val read = tk.any { (it.startsWith("oku") && !it.startsWith("okul")) || it.startsWith("seslendir") } ||
+            has(t, "sesli oku", "bana oku")
+        if (!read) return null
+        if (has(t, "ekran")) {
+            if (files.screenReadEnabled()) {
+                return "Ekrandaki yazıyı okutmak için okumak istediğin ekrana geç ve kenardaki erişilebilirlik " +
+                    "düğmesine (küçük insan simgesi) bas. Tekrar basınca susar."
+            }
+            files.openAccessibilitySettings()
+            return "Ekrandaki yazıyı okuyabilmem için bir kez izin vermen gerekiyor:\n" +
+                "1) Açılan Erişilebilirlik ekranında \"Yüklü uygulamalar\" → \"D-FON Ekran Okuma\"yı aç.\n" +
+                "2) Kısayolu açık bırak; ekranın kenarında küçük bir düğme çıkar.\n" +
+                "3) Okumak istediğin ekranda o düğmeye bas, okurum. Tekrar basınca susarım.\n\n" +
+                "Samsung \"kısıtlı ayar\" uyarısı verirse: Ayarlar → Uygulamalar → D-FON → sağ üstteki ⋮ → " +
+                "\"Kısıtlı ayarlara izin ver\", sonra tekrar dene."
+        }
+        if (has(t, "sec", "yazi")) {
+            return "Herhangi bir uygulamada yazıyı seç, açılan menüde \"D-FON ile oku\"ya bas " +
+                "(görünmüyorsa menüdeki ⋮ ya da ok işaretine dokun). Ya da \"oku: metin\" yazarak bana okut."
+        }
+        val wantPdf = has(t, "pdf")
+        val wantWord = has(t, "word", "docx")
+        val readable = setOf("pdf", "word", "metin")
+        val ready = fresh.filter { files.kind(it) in readable }
+        if (ready.isNotEmpty() && !wantPdf && !wantWord || ready.any { (wantPdf && files.kind(it) == "pdf") || (wantWord && files.kind(it) == "word") }) {
+            val no = ready.firstOrNull { (wantPdf && files.kind(it) == "pdf") || (wantWord && files.kind(it) == "word") } ?: ready.first()
+            fresh.remove(no)
+            return files.readAloud(no)
+        }
+        val last = files.lastFileNo
+        if (has(t, "dosya", "belge") && last != null && files.kind(last) in readable) return files.readAloud(last)
+        return need(Action.READ)
+    }
 
     // ---------------- saat, alarm, zamanlayıcı ----------------
 
@@ -369,6 +419,7 @@ class CommandEngine(
         if (body.isEmpty() || head.split(" ").size > 6) return null
         val title = body.lineSequence().first().take(30)
         return when {
+            head.contains("oku") || head.contains("seslendir") -> files.speakText(body)
             head.contains("word") -> files.textToDocx(body, title)
             head.contains("pdf") -> files.textToPdf(body, title)
             else -> null
@@ -425,6 +476,7 @@ class CommandEngine(
         val want = when (a) {
             Action.WORD_TO_PDF -> setOf("word", "metin")
             Action.IMAGES_TO_PDF -> setOf("resim")
+            Action.READ -> setOf("pdf", "word", "metin")
             else -> setOf("pdf")
         }
         val ready = fresh.filter { files.kind(it) in want }
@@ -437,12 +489,14 @@ class CommandEngine(
             Action.WORD_TO_PDF -> files.pick("word", true)
             Action.IMAGES_TO_PDF -> files.pick("resim", true)
             Action.MERGE_PDF -> files.pick("pdf", true)
+            Action.READ -> files.pick("hepsi", false)
             else -> files.pick("pdf", false)
         }
         return when (a) {
             Action.IMAGES_TO_PDF -> "PDF yapılacak resimleri seç (birden fazla seçebilirsin)."
             Action.MERGE_PDF -> "Birleştirilecek PDF'leri sırayla seç."
             Action.WORD_TO_PDF -> "Word (.docx) dosyasını seç."
+            Action.READ -> "Okumamı istediğin PDF ya da Word dosyasını seç."
             else -> "PDF dosyasını seç."
         }
     }
@@ -456,12 +510,13 @@ class CommandEngine(
                 Action.WORD_TO_PDF -> of("word", "metin").map { files.filesToPdf(listOf(it)) }
                 Action.IMAGES_TO_PDF -> of("resim").let { if (it.isEmpty()) emptyList() else listOf(files.filesToPdf(it)) }
                 Action.MERGE_PDF -> of("pdf").let { if (it.isEmpty()) emptyList() else listOf(files.mergePdfs(it)) }
+                Action.READ -> of("pdf", "word", "metin").take(1).map { files.readAloud(it) }
             }
         } catch (e: Exception) {
             return "İşlem başarısız: ${e.message ?: e.javaClass.simpleName}"
         }
         if (result.isEmpty()) return "Seçilen dosya bu işlem için uygun değil."
-        val tip = if (a == Action.PDF_TO_IMAGES) "" else
+        val tip = if (a == Action.PDF_TO_IMAGES || a == Action.READ) "" else
             "\n\nAçmak için \"dosyayı aç\", göndermek için \"dosyayı WhatsApp'tan gönder\" de."
         return result.joinToString("\n") + tip
     }
@@ -568,6 +623,7 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)
 📄 Dosyalar: "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir", "dosyayı aç", "dosyayı WhatsApp'tan gönder"
 ✍ "PDF yap: metnin…" / "Word yap: metnin…"
+🔊 Okuma: "PDF'i oku", "Word'ü oku", "dosyayı oku", "oku: metin…", "ekrandaki yazıyı oku", "dur" (susar). Başka bir uygulamada yazı seçip menüden "D-FON ile oku" da diyebilirsin.
 🌐 İnternet (tarayıcıda açılır): "hava durumu ara", "YouTube'da Kuran tilaveti izle", "Vikipedi'de Osmanlı ara", "trt.net.tr"
 
 Birden fazla komutu "ve" ile birleştirebilirsin: "parlaklık 20 ve sessize al".

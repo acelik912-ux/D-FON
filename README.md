@@ -29,9 +29,16 @@ Uygulamada `yardım` yazınca tam liste çıkar. Örnekler:
 | Uygulamalar | "WhatsApp'ı aç" (sadece izinli olanlar) |
 | Dosyalar | "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir" |
 | Yazıdan belge | "PDF yap: …", "Word yap: …" |
+| Sesli okuma | "PDF'i oku", "Word'ü oku", "dosyayı oku", "oku: …", "ekrandaki yazıyı oku", "dur" |
 | İnternet | "hava durumu ara", "YouTube'da … izle", "trt.net.tr" |
 
 Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al". Son 20 komut "🕘 Geçmiş" düğmesinde durur.
+
+**Seçilen yazıyı okutma:** Herhangi bir uygulamada yazı seç → menüde **D-FON ile oku**. Paylaş menüsünden de gönderebilirsin.
+
+**Ekrandaki yazıyı okutma:** Ayarlar → Erişilebilirlik → Yüklü uygulamalar → **D-FON Ekran Okuma**'yı aç. Ekranın kenarında çıkan küçük düğmeye basınca o an ekrandaki yazıyı okur, tekrar basınca susar. Samsung "kısıtlı ayar" derse: Ayarlar → Uygulamalar → D-FON → ⋮ → *Kısıtlı ayarlara izin ver*.
+
+Okuma telefonun kendi seslendirme motoruyla yapılır; Türkçe ses paketi yüklüyse internet gerekmez.
 
 Çıktılar `İndirilenler/D-FON` ve `Resimler/D-FON` klasörlerine kaydedilir. Gereksinim: Android 10+.
 
@@ -39,5 +46,6 @@ Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al". Son 20 komu
 - `CommandEngine.kt` — Türkçe komutları anlayan kural motoru (yeni komut buraya eklenir)
 - `PhoneTools.kt` — telefon ayarları
 - `ClockTools.kt` — alarm, zamanlayıcı, saat ve tarih
+- `Speaker.kt`, `ReadTextActivity.kt`, `ScreenReadService.kt` — sesli okuma
 - `FileTools.kt` — uygulamalar, dosyalar, PDF/Word dönüştürme (PdfBox-Android)
 - `MainActivity.kt` — ekran, sesli komut, uygulama seçimi

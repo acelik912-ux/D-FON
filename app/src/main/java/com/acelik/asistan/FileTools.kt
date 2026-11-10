@@ -411,6 +411,39 @@ class FileTools(private val activity: Activity) {
             "</w:sectPr></w:body></w:document>"
     }
 
+    // ---------------- sesli okuma ----------------
+
+    fun readAloud(no: Int): String {
+        val f = file(no)
+        val text = when (kind(f)) {
+            "pdf" -> pdfText(f.uri)
+            "word" -> docxText(f.uri)
+            "metin" -> String(readBytes(f.uri), Charsets.UTF_8)
+            else -> return "${f.name} okunabilen bir dosya değil. PDF, Word (.docx) ya da metin dosyası seç."
+        }
+        if (text.isBlank()) return "${f.name} içinde yazı bulunamadı. Taranmış (resim) bir PDF olabilir."
+        speakText(text)
+        return "🔊 ${f.name} okunuyor. Durdurmak için \"dur\" yaz ya da söyle."
+    }
+
+    fun speakText(text: String): String {
+        if (!activity.onMain { Speaker.speak(activity, text) }) return "Okunacak yazı yok."
+        return "🔊 Okuyorum. Durdurmak için \"dur\" de."
+    }
+
+    fun screenReadEnabled(): Boolean {
+        val s = android.provider.Settings.Secure.getString(
+            cr, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val me = android.content.ComponentName(activity, ScreenReadService::class.java)
+        return s.split(':').any { android.content.ComponentName.unflattenFromString(it) == me }
+    }
+
+    fun openAccessibilitySettings() {
+        val i = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity.onMain { activity.startActivity(i) }
+    }
+
     private fun docxText(uri: Uri): String {
         cr.openInputStream(uri)?.use { input ->
             ZipInputStream(input).use { z ->

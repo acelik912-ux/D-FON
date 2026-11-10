@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">D-FON</string>
+    <string name="read_label">D-FON ile oku</string>
+    <string name="screen_read_label">D-FON Ekran Okuma</string>
+    <string name="screen_read_summary">Erişilebilirlik düğmesine basınca ekrandaki yazıyı sesli okur</string>
+    <string name="screen_read_desc">Açınca ekranda küçük bir erişilebilirlik düğmesi çıkar. Ona bastığında D-FON o an ekranda görünen yazıları sesli okur; tekrar basınca susar. Okunan yazılar hiçbir yere kaydedilmez ve gönderilmez. Şifre alanları okunmaz.</string>
 </resources>
