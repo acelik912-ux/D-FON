@@ -1,14 +1,21 @@
 package com.acelik.asistan
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -42,6 +49,14 @@ class MainActivity : Activity() {
 
     private var busy = false
 
+    private lateinit var micBtn: TextView
+    private lateinit var micHint: TextView
+    private lateinit var wakeChip: TextView
+    private var recognizer: SpeechRecognizer? = null
+    private var voiceOn = false
+    private var pendingVoice = false
+    private var pendingWake = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         phone = PhoneTools(this)
@@ -53,17 +68,41 @@ class MainActivity : Activity() {
 
         addBubble(
             "Merhaba! Ben D-FON. Tamamen telefonunda çalışırım: internete bağlanmam, ücret istemem, " +
-                "kimseye veri göndermem.\n\nYaz ya da 🎤'ya basıp söyle. Ne yapabildiğimi görmek için \"yardım\" yaz.",
+                "kimseye veri göndermem.\n\nYaz ya da ortadaki büyük 🎤'ya dokunup söyle. Ne yapabildiğimi görmek için \"yardım\" yaz.",
             Who.BOT
         )
         if (files.allowedPackages().isEmpty()) {
             addBubble("Açabileceğim uygulamaları seçmek için üstteki \"Uygulamalar\" düğmesine bas.", Who.INFO)
         }
+        handleWake(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWake(intent)
     }
 
     override fun onResume() {
         super.onResume()
         refreshPermButton()
+        WakeService.appVisible = true
+        WakeService.instance?.pause()
+        if (WakeService.isEnabled(this) && micGranted()) WakeService.start(this)
+        updateWakeChip()
+    }
+
+    override fun onPause() {
+        stopVoice(null)
+        WakeService.appVisible = false
+        WakeService.instance?.resume()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        recognizer?.destroy()
+        recognizer = null
+        super.onDestroy()
     }
 
     // ---------------- Arayüz ----------------
@@ -99,6 +138,33 @@ class MainActivity : Activity() {
         scroll = ScrollView(this).apply { addView(chat) }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
+        // Ortadaki büyük mikrofon
+        val micPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(6), 0, dp(4))
+        }
+        micBtn = TextView(this).apply {
+            text = "🎤"
+            textSize = 38f
+            gravity = Gravity.CENTER
+            background = oval(ACCENT)
+            elevation = dp(6).toFloat()
+            contentDescription = "Konuş"
+            setOnClickListener { if (voiceOn) stopVoice(null) else startVoice() }
+        }
+        micPanel.addView(micBtn, LinearLayout.LayoutParams(dp(96), dp(96)))
+        micHint = TextView(this).apply {
+            text = "Dokun ve söyle"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF8A94A6.toInt())
+            setPadding(dp(16), dp(6), dp(16), 0)
+            maxLines = 2
+        }
+        micPanel.addView(micHint, LinearLayout.LayoutParams(-1, -2))
+        root.addView(micPanel, LinearLayout.LayoutParams(-1, -2))
+
         val chips = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
         chips.addView(TextView(this).apply {
             text = "🕘 Geçmiş"
@@ -108,6 +174,14 @@ class MainActivity : Activity() {
             background = rounded(ACCENT, 18)
             setOnClickListener { showHistory() }
         }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+        wakeChip = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            background = rounded(CHIP, 18)
+            setOnClickListener { toggleWake() }
+        }
+        chips.addView(wakeChip, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
         listOf(
             "Yardım", "Durum", "PDF'i oku", "Word'ü oku", "Ekrandaki yazıyı oku", "Dur",
             "Saat kaç", "5 dakika zamanlayıcı", "Alarmları göster", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
@@ -139,12 +213,6 @@ class MainActivity : Activity() {
             background = rounded(CHIP, 24)
             setOnClickListener { if (!busy) files.pick("hepsi", true) }
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { setMargins(0, 0, dp(4), 0) })
-        bar.addView(Button(this).apply {
-            text = "🎤"
-            textSize = 18f
-            background = rounded(CHIP, 24)
-            setOnClickListener { startVoice() }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
         input = EditText(this).apply {
             hint = "Ne yapayım?"
             setHintTextColor(0xFF8A94A6.toInt())
@@ -275,7 +343,179 @@ class MainActivity : Activity() {
 
     // ---------------- Ses ----------------
 
+    private fun micGranted() =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun oval(color: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL
+        setColor(color)
+    }
+
     private fun startVoice() {
+        if (busy || voiceOn) return
+        if (!micGranted()) {
+            pendingVoice = true
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            startVoicePopup()
+            return
+        }
+        Speaker.stop()
+        try {
+            recognizer?.destroy()
+            recognizer = Voice.create(this).also {
+                it.setRecognitionListener(voiceListener)
+                it.startListening(Voice.intent(true))
+            }
+            setVoiceUi(true, "Dinliyorum…")
+        } catch (e: Exception) {
+            setVoiceUi(false, null)
+            startVoicePopup()
+        }
+    }
+
+    private fun stopVoice(hint: String?) {
+        if (voiceOn) {
+            try { recognizer?.cancel() } catch (_: Exception) {}
+        }
+        setVoiceUi(false, hint)
+    }
+
+    private fun setVoiceUi(on: Boolean, hint: String?) {
+        voiceOn = on
+        micBtn.background = oval(if (on) MIC_ON else ACCENT)
+        if (!on) {
+            micBtn.scaleX = 1f
+            micBtn.scaleY = 1f
+        }
+        micHint.text = hint ?: if (on) "Dinliyorum…" else "Dokun ve söyle"
+    }
+
+    private val voiceListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(rmsdB: Float) {
+            if (!voiceOn) return
+            val s = 1f + rmsdB.coerceIn(0f, 10f) / 30f
+            micBtn.scaleX = s
+            micBtn.scaleY = s
+        }
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {
+            if (voiceOn) micHint.text = "Anlıyorum…"
+        }
+        override fun onPartialResults(partialResults: Bundle?) {
+            val p = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            if (voiceOn && !p.isNullOrBlank()) micHint.text = p
+        }
+        override fun onResults(results: Bundle?) {
+            val said = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            setVoiceUi(false, null)
+            if (!said.isNullOrBlank()) {
+                // "Bir iki üç fon, ..." diye başlandıysa uyandırma sözünü at
+                val cmd = Voice.wakeCommand(said) ?: said
+                if (cmd.isBlank()) startVoice() else submit(cmd)
+            }
+        }
+        override fun onError(error: Int) {
+            if (!voiceOn) return
+            setVoiceUi(false, null)
+            if (Voice.languageError(error)) {
+                startVoice()
+                return
+            }
+            setVoiceUi(false, Voice.errorText(error))
+        }
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
+    // ---------------- Sesle uyandırma ----------------
+
+    private fun handleWake(i: Intent?) {
+        if (i == null || !i.getBooleanExtra(WakeService.EXTRA_WAKE, false)) return
+        i.removeExtra(WakeService.EXTRA_WAKE)
+        val cmd = i.getStringExtra(WakeService.EXTRA_COMMAND).orEmpty().trim()
+        if (cmd.isNotEmpty()) submit(cmd) else micBtn.postDelayed({ startVoice() }, 400)
+    }
+
+    private fun updateWakeChip() {
+        if (!::wakeChip.isInitialized) return
+        val on = WakeService.isEnabled(this)
+        wakeChip.text = if (on) "👂 Uyandırma: Açık" else "👂 Uyandırma: Kapalı"
+        wakeChip.background = rounded(if (on) MIC_ON else CHIP, 18)
+    }
+
+    private fun toggleWake() {
+        if (WakeService.isEnabled(this)) {
+            WakeService.setEnabled(this, false)
+            WakeService.stop(this)
+            updateWakeChip()
+            addBubble("Sesle uyandırma kapatıldı. Mikrofon artık arka planda dinlemiyor.", Who.INFO)
+            return
+        }
+        if (!micGranted()) {
+            pendingWake = true
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+        }
+        WakeService.setEnabled(this, true)
+        WakeService.start(this)
+        updateWakeChip()
+        addBubble(
+            "👂 Sesle uyandırma açık. Ekran açık ve kilitsizken \"Bir iki üç fon\" de, D-FON açılıp seni dinlesin. " +
+                "Arkasından komutu da söyleyebilirsin: \"Bir iki üç fon, YouTube'u aç\".\n\n" +
+                "Ekran kapalı ya da kilitliyken mikrofon kullanılmaz. Duyduklarım hiçbir yere kaydedilmez. " +
+                "Bildirim çubuğunda \"D-FON dinliyor\" yazısı görünür; oradan da kapatabilirsin.",
+            Who.INFO
+        )
+        if (!Settings.canDrawOverlays(this)) {
+            AlertDialog.Builder(this)
+                .setTitle("Bir izin daha")
+                .setMessage(
+                    "Başka bir uygulamadayken seni duyunca D-FON'u öne getirebilmem için " +
+                        "\"Diğer uygulamaların üzerinde göster\" iznini açman gerekiyor. " +
+                        "Açmazsan seni duyduğumda dokunman için bir bildirim gösteririm."
+                )
+                .setPositiveButton("İzni aç") { _, _ ->
+                    try {
+                        startActivity(
+                            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                        )
+                    } catch (_: Exception) {}
+                }
+                .setNegativeButton("Şimdi değil", null)
+                .show()
+        }
+        addBubble(
+            "İpucu: Samsung pil tasarrufu servisi kapatmasın diye Ayarlar → Uygulamalar → D-FON → Pil → " +
+                "\"Kısıtlamasız\" seç.",
+            Who.INFO
+        )
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_MIC) return
+        val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        val v = pendingVoice
+        val w = pendingWake
+        pendingVoice = false
+        pendingWake = false
+        if (!ok) {
+            addBubble("Sesli komut için mikrofon izni gerekiyor.", Who.INFO)
+            return
+        }
+        if (w) toggleWake() else if (v) startVoice()
+    }
+
+    private fun startVoicePopup() {
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "tr-TR")
@@ -439,6 +679,9 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQ_VOICE = 41
+        private const val REQ_MIC = 42
+        private const val REQ_NOTIF = 43
+        private val MIC_ON = 0xFFE05A5A.toInt()
         private const val HISTORY_MAX = 20
         private val BG = 0xFF0F1A2A.toInt()
         private val BUBBLE = 0xFF1F3A5F.toInt()

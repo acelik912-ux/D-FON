@@ -34,6 +34,10 @@ Uygulamada `yardım` yazınca tam liste çıkar. Örnekler:
 
 Komutlar "ve" ile birleştirilebilir: "parlaklık 20 ve sessize al". Son 20 komut "🕘 Geçmiş" düğmesinde durur.
 
+**Sesli komut:** Sohbet ekranının ortasındaki büyük 🎤'ya dokun ve söyle; söylediğin anında yapılır.
+
+**Sesle uyandırma ("Bir iki üç fon"):** Alttaki **👂 Uyandırma** düğmesiyle aç. Ekran açık ve kilitsizken "Bir iki üç fon" deyince D-FON açılıp dinlemeye başlar; "Bir iki üç fon, YouTube'u aç" dersen komutu doğrudan yapar. Başka uygulamadayken öne gelebilmesi için *Diğer uygulamaların üzerinde göster* izni gerekir. Ekran kapalı/kilitliyken mikrofon kullanılmaz; duyulanlar kaydedilmez. Samsung'da Ayarlar → Uygulamalar → D-FON → Pil → *Kısıtlamasız* seçmek önerilir.
+
 **Seçilen yazıyı okutma:** Herhangi bir uygulamada yazı seç → menüde **D-FON ile oku**. Paylaş menüsünden de gönderebilirsin.
 
 **Ekrandaki yazıyı okutma:** Ayarlar → Erişilebilirlik → Yüklü uygulamalar → **D-FON Ekran Okuma**'yı aç. Ekranın kenarında çıkan küçük düğmeye basınca o an ekrandaki yazıyı okur, tekrar basınca susar. Samsung "kısıtlı ayar" derse: Ayarlar → Uygulamalar → D-FON → ⋮ → *Kısıtlı ayarlara izin ver*.
@@ -46,6 +50,7 @@ Okuma telefonun kendi seslendirme motoruyla yapılır; Türkçe ses paketi yükl
 - `CommandEngine.kt` — Türkçe komutları anlayan kural motoru (yeni komut buraya eklenir)
 - `PhoneTools.kt` — telefon ayarları
 - `ClockTools.kt` — alarm, zamanlayıcı, saat ve tarih
+- `Voice.kt`, `WakeService.kt` — sesli komut ve "bir iki üç fon" ile uyandırma
 - `Speaker.kt`, `ReadTextActivity.kt`, `ScreenReadService.kt` — sesli okuma
 - `FileTools.kt` — uygulamalar, dosyalar, PDF/Word dönüştürme (PdfBox-Android)
 - `MainActivity.kt` — ekran, sesli komut, uygulama seçimi

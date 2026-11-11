@@ -9,6 +9,13 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Saat uygulamasına alarm ve zamanlayıcı kurdurmak için -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Mikrofon: sesli komut ve "bir iki üç fon" ile uyandırma -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Uyandırılınca D-FON'u öne getirebilmek için ("Üstte göster") -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <queries>
         <intent>
@@ -17,6 +24,9 @@
         <!-- Sesli okuma motorunu (TTS) bulabilmek için -->
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
         <!-- Yüklü uygulamaları görebilmek ve açabilmek için -->
         <intent>
@@ -42,12 +52,18 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".WakeService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <!-- Herhangi bir uygulamada yazı seçince menüde "D-FON ile oku" -->
         <activity
