@@ -34,6 +34,8 @@ import android.widget.FrameLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.BaseAdapter
+import android.widget.ImageView
+import android.widget.SeekBar
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -345,6 +347,7 @@ class MainActivity : Activity() {
             tile("✅", "İzinli uygulamalar") { showAppPicker() },
             tile("🔐", "İzinler") { showPermissions() },
             tile("📝", "Notlarım") { submit("Notlarım", true) },
+            tile("🎨", "Widget teması") { showWidgetStyle() },
             voiceReplyTile,
             tile("🧹", "Sohbeti temizle") { clearChat() },
         )))
@@ -794,8 +797,99 @@ class MainActivity : Activity() {
         buttons.addView(mini("📍 Konumu bul") { locate() }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         buttons.addView(mini("⚙ Ayarlar") { showPrayerSettings() }, LinearLayout.LayoutParams(0, -2, 0.8f).apply { setMargins(dp(4), 0, 0, 0) })
         card.addView(buttons, LinearLayout.LayoutParams(-1, -2))
+        card.addView(TextView(this).apply {
+            text = "🎨  Ana ekran widget'ı: tema ve yazı boyutu  ›"
+            textSize = 13f
+            setTextColor(0xFFFFD98A.toInt())
+            setPadding(dp(2), dp(10), dp(2), dp(2))
+            setOnClickListener { showWidgetStyle() }
+        })
         refreshPrayerCard()
         return card
+    }
+
+    /** Widget teması ve yazı büyüklüğü seçimi, canlı önizlemeli. */
+    private fun showWidgetStyle() {
+        var selected = WidgetArt.theme(this).id
+        var scale = WidgetArt.textScale(this)
+        val density = resources.displayMetrics.density
+        val pw = minOf((resources.displayMetrics.widthPixels * 0.78f).toInt(), 760)
+        val ph = pw * 250 / 440
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(6), dp(16), dp(6))
+        }
+        val sizeLabel = TextView(this).apply {
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+        }
+        val seek = SeekBar(this).apply {
+            max = 9 // %70 … %160
+            progress = Math.round((scale - 0.7f) / 0.1f).coerceIn(0, 9)
+        }
+        box.addView(sizeLabel)
+        box.addView(seek)
+        box.addView(TextView(this).apply {
+            text = "Tema seç:"
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(10), 0, dp(4))
+        })
+        val items = WidgetArt.THEMES.map { t ->
+            val iv = ImageView(this).apply {
+                adjustViewBounds = true
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                contentDescription = t.name
+            }
+            val label = TextView(this).apply {
+                text = t.name
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(2), 0, dp(10))
+            }
+            val cell = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(iv, LinearLayout.LayoutParams(-1, -2))
+                addView(label)
+            }
+            box.addView(cell)
+            Triple(t, iv, cell)
+        }
+        fun render() {
+            sizeLabel.text = "Yazı ve sayı büyüklüğü: %${Math.round(scale * 100)}"
+            items.forEach { (t, iv, _) ->
+                iv.setImageBitmap(WidgetArt.preview(t, pw, ph, scale, density))
+                iv.background = if (t.id == selected) rounded(ACCENT, 18) else null
+            }
+        }
+        items.forEach { (t, _, cell) -> cell.setOnClickListener { selected = t.id; render() } }
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                scale = 0.7f + p * 0.1f
+                render()
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        render()
+
+        AlertDialog.Builder(this)
+            .setTitle("Namaz widget'ı")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Kaydet") { _, _ ->
+                WidgetArt.setTheme(this, selected)
+                WidgetArt.setTextScale(this, scale)
+                PrayerWidget.updateAll(this)
+                val placed = android.appwidget.AppWidgetManager.getInstance(this)
+                    .getAppWidgetIds(android.content.ComponentName(this, PrayerWidget::class.java)).isNotEmpty()
+                showResult(
+                    "🎨 Widget: ${WidgetArt.THEMES.first { it.id == selected }.name}, yazı %${Math.round(scale * 100)}." +
+                        if (placed) "" else "\n\nAna ekrana eklemek için: ana ekranda boş bir yere basılı tut → Widget'lar → D-FON → D-FON Namaz Vakitleri."
+                )
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
     }
 
     private fun refreshPrayerCard() {
