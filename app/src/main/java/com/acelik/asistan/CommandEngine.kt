@@ -10,7 +10,8 @@ import java.net.URLEncoder
 class CommandEngine(
     private val phone: PhoneTools,
     private val files: FileTools,
-    private val clock: ClockTools
+    private val clock: ClockTools,
+    private val ctx: android.content.Context? = null
 ) {
 
     enum class Action { PDF_TO_WORD, WORD_TO_PDF, IMAGES_TO_PDF, PDF_TO_IMAGES, MERGE_PDF, READ }
@@ -33,6 +34,7 @@ class CommandEngine(
 
         if (has(t, "yardim", "neler yapabilirsin", "ne yapabilirsin", "komutlar")) return listOf(HELP)
 
+        prayerCommand(t)?.let { return listOf(it) }
         stopReading(t)?.let { return listOf(it) }
         textToDocument(text)?.let { return listOf(it) }
         readCommand(t)?.let { return listOf(it) }
@@ -86,6 +88,29 @@ class CommandEngine(
         settingsScreen(t)?.let { return it }
         appCommand(t)?.let { return it }
         return null
+    }
+
+    // ---------------- namaz vakitleri ----------------
+
+    private fun prayerCommand(t: String): String? {
+        val c = ctx ?: return null
+        if (!has(t, "namaz", "ezan")) return null
+        if (tokens(t).any { it.startsWith("sessiz") || it.startsWith("sustur") }) {
+            val o = onOff(t)
+            if (o == false || (o == null && has(t, "almasin", "almayin", "iptal"))) {
+                Prayer.setEnabled(c, false)
+                return "🔔 Ezanda sessize alma kapatıldı."
+            }
+            if (!Prayer.hasLocation(c)) {
+                return "Önce konumunu bulmam lazım: ⊞ Butonlar ekranındaki namaz kartında \"📍 Konumu bul\"a bas."
+            }
+            Prayer.setEnabled(c, true)
+            val next = Prayer.nextEzan(c)
+            return "🔕 Ezanda sessize alma açık: her seçili vakitte ${Prayer.duration(c)} dk sessiz, sonra otomatik sesli." +
+                (next?.let { "\nSıradaki: ${it.first} ${Prayer.fmt(it.second)}" } ?: "") +
+                (if (!phone.hasDndAccess()) "\n⚠ Tam sessiz için \"Rahatsız Etmeyin erişimi\" gerekli (İzinler); yoksa titreşime alırım." else "")
+        }
+        return Prayer.todayText(c)
     }
 
     private fun unknown(t: String) =
@@ -619,6 +644,7 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 🔊 Ses: "medya sesi 50", "zil sesini artır", "sesi kapat", "sessize al", "titreşime al", "sessizden çık", "rahatsız etmeyi aç"
 🔦 "feneri aç", "gece modu", "gündüz modu", "durum" (pil ve ayarlar)
 ⏰ Saat: "alarm 7:30", "sabah 6'da uyandır", "akşam 9 buçukta alarm kur", "5 dakika zamanlayıcı", "1 saat 20 dakika sayaç kur", "alarmları göster", "saat kaç", "bugün günlerden ne"
+🕌 Namaz: "namaz vakitleri", "ezanda sessize al", "ezanda sessize almayı kapat"
 ⚙ Ayar ekranları: "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu", "duvar kağıdı", "konum", "uçak modu"…
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)
 📄 Dosyalar: "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir", "dosyayı aç", "dosyayı WhatsApp'tan gönder"

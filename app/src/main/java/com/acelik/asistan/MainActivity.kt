@@ -22,6 +22,17 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Looper
+import android.text.SpannableString
+import android.text.TextUtils
+import android.text.style.RelativeSizeSpan
+import android.widget.ArrayAdapter
+import android.widget.FrameLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -49,6 +60,15 @@ class MainActivity : Activity() {
 
     private var busy = false
 
+    private lateinit var panel: ScrollView
+    private lateinit var panelBtn: Button
+    private lateinit var resultLine: TextView
+    private lateinit var appGrid: LinearLayout
+    private lateinit var prayerInfo: TextView
+    private lateinit var prayerRow: LinearLayout
+    private lateinit var prayerToggle: TextView
+    private var pendingLocate = false
+
     private lateinit var micBtn: TextView
     private lateinit var micHint: TextView
     private lateinit var wakeChip: TextView
@@ -61,7 +81,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         phone = PhoneTools(this)
         files = FileTools(this)
-        engine = CommandEngine(phone, files, ClockTools(this))
+        engine = CommandEngine(phone, files, ClockTools(this), this)
         window.statusBarColor = BG
         window.navigationBarColor = BG
         setContentView(buildUi())
@@ -90,6 +110,8 @@ class MainActivity : Activity() {
         WakeService.instance?.pause()
         if (WakeService.isEnabled(this) && micGranted()) WakeService.start(this)
         updateWakeChip()
+        Prayer.recover(this)
+        if (::prayerRow.isInitialized) refreshPrayerCard()
     }
 
     override fun onPause() {
@@ -127,16 +149,21 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         permBtn = smallButton("İzinler") { showPermissions() }
         top.addView(permBtn)
-        top.addView(smallButton("Uygulamalar") { showAppPicker() })
-        top.addView(smallButton("Temizle") { clearChat() })
+        panelBtn = smallButton("⊞ Butonlar") { showPanel(panel.visibility != View.VISIBLE) }
+        top.addView(panelBtn)
         root.addView(top)
 
         chat = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(4), dp(12), dp(12))
         }
+        // Sohbet ve buton ekranı aynı yerde; üstteki düğmeyle değişir
+        val content = FrameLayout(this)
         scroll = ScrollView(this).apply { addView(chat) }
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        content.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        panel = buildPanel()
+        content.addView(panel, FrameLayout.LayoutParams(-1, -1))
+        root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Ortadaki büyük mikrofon
         val micPanel = LinearLayout(this).apply {
@@ -164,43 +191,6 @@ class MainActivity : Activity() {
         }
         micPanel.addView(micHint, LinearLayout.LayoutParams(-1, -2))
         root.addView(micPanel, LinearLayout.LayoutParams(-1, -2))
-
-        val chips = LinearLayout(this).apply { setPadding(dp(8), 0, dp(8), 0) }
-        chips.addView(TextView(this).apply {
-            text = "🕘 Geçmiş"
-            setTextColor(Color.BLACK)
-            textSize = 13f
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            background = rounded(ACCENT, 18)
-            setOnClickListener { showHistory() }
-        }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
-        wakeChip = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            background = rounded(CHIP, 18)
-            setOnClickListener { toggleWake() }
-        }
-        chips.addView(wakeChip, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
-        listOf(
-            "Yardım", "Durum", "PDF'i oku", "Word'ü oku", "Ekrandaki yazıyı oku", "Dur",
-            "Saat kaç", "5 dakika zamanlayıcı", "Alarmları göster", "Parlaklık 30", "Feneri aç", "Feneri kapat", "Titreşime al", "Sessizden çık",
-            "Gece modu", "Medya sesi 50", "PDF'i Word'e çevir", "Word'ü PDF yap", "Resimleri PDF yap",
-            "PDF'leri birleştir", "PDF'i resme çevir", "Dosyayı aç", "Wi-Fi", "Karanlık mod", "Uygulamalar"
-        ).forEach { cmd ->
-            chips.addView(TextView(this).apply {
-                text = cmd
-                setTextColor(Color.WHITE)
-                textSize = 13f
-                setPadding(dp(12), dp(7), dp(12), dp(7))
-                background = rounded(CHIP, 18)
-                setOnClickListener { submit(cmd) }
-            }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
-        }
-        root.addView(HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(chips)
-        })
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -234,7 +224,453 @@ class MainActivity : Activity() {
         }
         bar.addView(sendBtn, LinearLayout.LayoutParams(-2, dp(48)))
         root.addView(bar)
+        showPanel(true)
         return root
+    }
+
+    // ---------------- Buton ekranı ----------------
+
+    private fun showPanel(on: Boolean) {
+        panel.visibility = if (on) View.VISIBLE else View.GONE
+        scroll.visibility = if (on) View.GONE else View.VISIBLE
+        panelBtn.text = if (on) "💬 Sohbet" else "⊞ Butonlar"
+        if (!on) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun showResult(text: String) {
+        resultLine.text = text
+        resultLine.visibility = View.VISIBLE
+        panel.post { panel.smoothScrollTo(0, 0) }
+    }
+
+    private fun buildPanel(): ScrollView {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(2), dp(10), dp(12))
+        }
+        resultLine = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            background = rounded(BUBBLE, 12)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setTextIsSelectable(true)
+            visibility = View.GONE
+            setOnClickListener { visibility = View.GONE }
+        }
+        col.addView(resultLine, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), 0, dp(3), dp(8)) })
+        col.addView(buildPrayerCard(), LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), 0, dp(3), dp(4)) })
+
+        col.addView(sectionTitle("📱 Uygulamalarım", "basılı tut: kaldır"))
+        appGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(appGrid)
+        refreshAppGrid()
+
+        for ((title, items) in SECTIONS) {
+            col.addView(sectionTitle(title, null))
+            col.addView(grid(items.map { (emoji, label, cmd) -> tile(emoji, label) { submit(cmd, true) } }))
+        }
+
+        wakeChip = tile("👂", "Uyandırma") { toggleWake() }
+        col.addView(sectionTitle("🛠 D-FON", null))
+        col.addView(grid(listOf(
+            tile("❓", "Yardım") { submit("Yardım", true) },
+            tile("🕘", "Geçmiş") { showHistory() },
+            wakeChip,
+            tile("✅", "İzinli uygulamalar") { showAppPicker() },
+            tile("🔐", "İzinler") { showPermissions() },
+            tile("🧹", "Sohbeti temizle") { clearChat() },
+        )))
+        return ScrollView(this).apply { addView(col) }
+    }
+
+    private fun sectionTitle(t: String, hint: String?) = TextView(this).apply {
+        text = if (hint == null) t else "$t   ·  $hint"
+        textSize = 13f
+        setTextColor(0xFF8A94A6.toInt())
+        setTypeface(typeface, Typeface.BOLD)
+        setPadding(dp(4), dp(12), dp(4), dp(2))
+    }
+
+    private fun setTileText(tv: TextView, emoji: String, label: String) {
+        val sp = SpannableString("$emoji\n$label")
+        sp.setSpan(RelativeSizeSpan(1.7f), 0, emoji.length, 0)
+        tv.text = sp
+    }
+
+    private fun tile(emoji: String, label: String, onClick: () -> Unit) = TextView(this).apply {
+        setTileText(this, emoji, label)
+        gravity = Gravity.CENTER
+        setTextColor(Color.WHITE)
+        textSize = 11.5f
+        maxLines = 3
+        setPadding(dp(3), dp(6), dp(3), dp(6))
+        background = rounded(CHIP, 14)
+        setOnClickListener { onClick() }
+    }
+
+    /** Görünümleri 4 sütunlu küçük düğme ızgarasına dizer. */
+    private fun grid(tiles: List<View>, cols: Int = 4): LinearLayout {
+        val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tiles.chunked(cols).forEach { row ->
+            val r = LinearLayout(this)
+            fun lp() = LinearLayout.LayoutParams(0, dp(74), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+            row.forEach { r.addView(it, lp()) }
+            repeat(cols - row.size) { r.addView(View(this), lp()) }
+            g.addView(r)
+        }
+        return g
+    }
+
+    // ---------------- Uygulama kısayolları ----------------
+
+    private fun shortcuts(): List<String> {
+        val raw = getSharedPreferences("dfon", MODE_PRIVATE).getString("kisayollar", null) ?: return emptyList()
+        return try {
+            val a = JSONArray(raw)
+            (0 until a.length()).map { a.getString(it) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveShortcuts(list: List<String>) {
+        getSharedPreferences("dfon", MODE_PRIVATE).edit()
+            .putString("kisayollar", JSONArray(list.distinct()).toString()).apply()
+    }
+
+    private fun refreshAppGrid() {
+        appGrid.removeAllViews()
+        val byPkg = files.installedApps().associateBy { it.pkg }
+        val tiles: List<View> = shortcuts().mapNotNull { byPkg[it] }.map { appTile(it) } +
+            tile("➕", "Uygulama ekle") { showAddShortcut() }
+        appGrid.addView(grid(tiles))
+    }
+
+    private fun appTile(app: FileTools.App) = TextView(this).apply {
+        text = app.label
+        gravity = Gravity.CENTER
+        textSize = 11f
+        setTextColor(Color.WHITE)
+        maxLines = 2
+        ellipsize = TextUtils.TruncateAt.END
+        background = rounded(CHIP, 14)
+        setPadding(dp(3), dp(8), dp(3), dp(4))
+        try {
+            val d = packageManager.getApplicationIcon(app.pkg)
+            val size = dp(32)
+            d.setBounds(0, 0, size, size)
+            setCompoundDrawables(null, d, null, null)
+            compoundDrawablePadding = dp(3)
+        } catch (ignored: Exception) {
+        }
+        setOnClickListener { showResult(files.openApp(app)) }
+        setOnLongClickListener {
+            AlertDialog.Builder(this@MainActivity)
+                .setMessage("${app.label} kısayollardan kaldırılsın mı?")
+                .setPositiveButton("Kaldır") { _, _ ->
+                    saveShortcuts(shortcuts() - app.pkg)
+                    refreshAppGrid()
+                }
+                .setNegativeButton("Vazgeç", null)
+                .show()
+            true
+        }
+    }
+
+    private fun showAddShortcut() {
+        val have = shortcuts().toSet()
+        val apps = files.installedApps().filter { it.pkg !in have }
+        var shown = apps
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, apps.map { it.label }.toMutableList())
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), 0)
+        }
+        val search = EditText(this).apply { hint = "Ara…" }
+        val list = ListView(this).apply { this.adapter = adapter }
+        box.addView(search)
+        box.addView(list, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55).toInt()))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Butonlara uygulama ekle")
+            .setView(box)
+            .setNegativeButton("Kapat", null)
+            .create()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: Editable?) {
+                val q = FileTools.norm(e?.toString() ?: "")
+                shown = if (q.isEmpty()) apps else apps.filter { FileTools.norm(it.label).contains(q) }
+                adapter.clear()
+                adapter.addAll(shown.map { it.label })
+            }
+        })
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val app = shown[pos]
+            saveShortcuts(shortcuts() + app.pkg)
+            // Kısayola eklenen uygulamayı D-FON sesli komutla da açabilsin
+            files.setAllowedPackages(files.allowedPackages() + app.pkg)
+            refreshAppGrid()
+            Toast.makeText(this, "${app.label} eklendi", Toast.LENGTH_SHORT).show()
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    // ---------------- Namaz vakitleri kartı ----------------
+
+    private fun buildPrayerCard(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(PRAYER_BG, 16)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        card.addView(TextView(this).apply {
+            text = "🕌 Namaz vakitleri"
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        prayerInfo = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFFB8D8C8.toInt())
+            setPadding(0, dp(2), 0, dp(6))
+        }
+        card.addView(prayerInfo)
+        prayerRow = LinearLayout(this)
+        card.addView(prayerRow, LinearLayout.LayoutParams(-1, -2))
+
+        val buttons = LinearLayout(this).apply { setPadding(0, dp(8), 0, 0) }
+        prayerToggle = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setTextColor(Color.BLACK)
+            setPadding(dp(6), dp(9), dp(6), dp(9))
+            setOnClickListener { togglePrayer() }
+        }
+        buttons.addView(prayerToggle, LinearLayout.LayoutParams(0, -2, 1.6f).apply { setMargins(0, 0, dp(4), 0) })
+        fun mini(t: String, onClick: () -> Unit) = TextView(this).apply {
+            text = t
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setTextColor(Color.WHITE)
+            background = rounded(PRAYER_BTN, 12)
+            setPadding(dp(6), dp(9), dp(6), dp(9))
+            setOnClickListener { onClick() }
+        }
+        buttons.addView(mini("📍 Konumu bul") { locate() }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        buttons.addView(mini("⚙ Ayarlar") { showPrayerSettings() }, LinearLayout.LayoutParams(0, -2, 0.8f).apply { setMargins(dp(4), 0, 0, 0) })
+        card.addView(buttons, LinearLayout.LayoutParams(-1, -2))
+        refreshPrayerCard()
+        return card
+    }
+
+    private fun refreshPrayerCard() {
+        prayerRow.removeAllViews()
+        val t = Prayer.timesFor(this, 0)
+        val on = Prayer.isEnabled(this)
+        if (t == null) {
+            prayerInfo.text = "Konumun henüz bulunmadı. \"📍 Konumu bul\"a bas (GPS internetsiz çalışır)."
+        } else {
+            val now = System.currentTimeMillis()
+            val nextIdx = t.indexOfFirst { it > now }
+            PrayerTimes.NAMES.forEachIndexed { i, n ->
+                val cell = TextView(this).apply {
+                    text = "$n\n${Prayer.fmt(t[i])}"
+                    gravity = Gravity.CENTER
+                    textSize = 12f
+                    setTextColor(if (i == nextIdx) Color.BLACK else Color.WHITE)
+                    if (i == nextIdx) background = rounded(ACCENT, 10)
+                    setPadding(0, dp(5), 0, dp(5))
+                }
+                prayerRow.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(1), 0, dp(1), 0) })
+            }
+            val next = Prayer.nextEzan(this)
+            prayerInfo.text = "📍 ${Prayer.locationText(this)}" +
+                if (on && next != null) "   ·   Sıradaki sessiz: ${next.first} ${Prayer.fmt(next.second)}" else ""
+        }
+        prayerToggle.text = if (on) "🔕 Ezanda sessiz: AÇIK (${Prayer.duration(this)} dk)" else "🔔 Ezanda sessiz: KAPALI"
+        prayerToggle.background = rounded(if (on) ACCENT else 0xFF9FB3AA.toInt(), 12)
+    }
+
+    private fun togglePrayer() {
+        if (Prayer.isEnabled(this)) {
+            Prayer.setEnabled(this, false)
+            refreshPrayerCard()
+            showResult("🔔 Ezanda sessize alma kapatıldı.")
+            return
+        }
+        if (!Prayer.hasLocation(this)) {
+            showResult("Önce konumunu bulayım; sonra tekrar bas.")
+            locate()
+            return
+        }
+        Prayer.setEnabled(this, true)
+        refreshPrayerCard()
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+        }
+        val next = Prayer.nextEzan(this)
+        showResult(
+            "🔕 Açıldı. Seçili her vakitte ezanla birlikte ${Prayer.duration(this)} dk " +
+                (if (Prayer.mode(this) == "titresim") "titreşime" else "sessize") +
+                " alırım, sonra kendiliğinden sesli yaparım." +
+                (next?.let { "\nSıradaki: ${it.first} ${Prayer.fmt(it.second)}" } ?: "") +
+                "\nTelefon zaten sessiz ya da titreşimdeyse dokunmam."
+        )
+        if (!phone.hasDndAccess() && Prayer.mode(this) == "sessiz") {
+            AlertDialog.Builder(this)
+                .setTitle("Bir izin gerekli")
+                .setMessage(
+                    "Telefonu tam sessize alabilmem için \"Rahatsız Etmeyin erişimi\" iznini açman gerekiyor. " +
+                        "Açmazsan ezanda titreşime alırım."
+                )
+                .setPositiveButton("İzni aç") { _, _ -> phone.requestDndAccess() }
+                .setNegativeButton("Titreşim yeter", null)
+                .show()
+        }
+    }
+
+    private fun showPrayerSettings() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        fun label(t: String) = TextView(this).apply {
+            text = t
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        box.addView(label("Hangi vakitlerde sessize alınsın?"))
+        val sel = Prayer.selected(this)
+        val checks = Prayer.SLOTS.map { (name, _) ->
+            CheckBox(this).apply { text = name; isChecked = name in sel }.also { box.addView(it) }
+        }
+
+        box.addView(label("Kaç dakika sessiz kalsın?"))
+        val durGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        Prayer.DURATIONS.forEach { m ->
+            durGroup.addView(RadioButton(this).apply {
+                text = "$m"
+                id = View.generateViewId()
+                tag = m
+                isChecked = m == Prayer.duration(this@MainActivity)
+            })
+        }
+        box.addView(durGroup)
+
+        box.addView(label("Nasıl?"))
+        val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val silent = RadioButton(this).apply { text = "Sessiz"; id = View.generateViewId() }
+        val vib = RadioButton(this).apply { text = "Titreşim"; id = View.generateViewId() }
+        modeGroup.addView(silent)
+        modeGroup.addView(vib)
+        (if (Prayer.mode(this) == "titresim") vib else silent).isChecked = true
+        box.addView(modeGroup)
+
+        box.addView(label("Sabah ezanı imsaktan kaç dk sonra okunuyor?"))
+        val offset = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(Prayer.sabahOffset(this@MainActivity).toString())
+        }
+        box.addView(offset)
+
+        box.addView(label("Konum (enlem, boylam) — istersen elle yaz"))
+        val loc = EditText(this).apply {
+            hint = "ör. 41.01, 28.97"
+            if (Prayer.hasLocation(this@MainActivity)) setText(Prayer.locationText(this@MainActivity))
+        }
+        box.addView(loc)
+
+        AlertDialog.Builder(this)
+            .setTitle("Ezanda sessize alma")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Kaydet") { _, _ ->
+                Prayer.setSelected(this, checks.filter { it.isChecked }.map { it.text.toString() }.toSet())
+                val chosen = (0 until durGroup.childCount).map { durGroup.getChildAt(it) as RadioButton }
+                    .firstOrNull { it.isChecked }?.tag as? Int
+                if (chosen != null) Prayer.setDuration(this, chosen)
+                Prayer.setMode(this, if (vib.isChecked) "titresim" else "sessiz")
+                Prayer.setSabahOffset(this, offset.text.toString().toIntOrNull()?.coerceIn(0, 120) ?: 0)
+                val parts = loc.text.toString().split(",", " ").mapNotNull { it.trim().toDoubleOrNull() }
+                if (parts.size == 2 && parts[0] in -66.0..66.0 && parts[1] in -180.0..180.0) {
+                    Prayer.setLocation(this, parts[0], parts[1])
+                }
+                refreshPrayerCard()
+                showResult("Kaydedildi.\n\n" + Prayer.todayText(this))
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    // ---------------- Konum (GPS, internetsiz) ----------------
+
+    private fun locGranted() =
+        checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun locate() {
+        if (!locGranted()) {
+            pendingLocate = true
+            requestPermissions(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                REQ_LOC
+            )
+            return
+        }
+        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+        val last = lm.getProviders(true).mapNotNull {
+            try { lm.getLastKnownLocation(it) } catch (e: SecurityException) { null }
+        }.maxByOrNull { it.time }
+        if (last != null && System.currentTimeMillis() - last.time < 3L * 24 * 3600_000) {
+            useLocation(last)
+            return
+        }
+        if (!lm.isLocationEnabled) {
+            showResult("Telefonun konumu kapalı. Açılan ekrandan konumu aç, sonra \"📍 Konumu bul\"a tekrar bas.")
+            try { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) } catch (ignored: Exception) {}
+            return
+        }
+        showResult("📍 Konum aranıyor… (GPS internetsiz çalışır; açık havada ya da pencere kenarında daha hızlı)")
+        val providers = lm.getProviders(true)
+        val provider = listOf("fused", LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .firstOrNull { it in providers } ?: providers.firstOrNull()
+        if (provider == null) {
+            locateFailed()
+            return
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(provider, null, mainExecutor) { loc ->
+                    if (loc != null) useLocation(loc) else locateFailed()
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(provider, object : LocationListener {
+                    override fun onLocationChanged(location: Location) = useLocation(location)
+                    @Deprecated("API")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {}
+                }, Looper.getMainLooper())
+            }
+        } catch (e: Exception) {
+            locateFailed()
+        }
+    }
+
+    private fun useLocation(l: Location) {
+        Prayer.setLocation(this, l.latitude, l.longitude)
+        refreshPrayerCard()
+        showResult("📍 Konum kaydedildi.\n\n" + Prayer.todayText(this))
+    }
+
+    private fun locateFailed() {
+        showResult(
+            "Konum bulunamadı. Biraz açık bir yerde tekrar dene ya da ⚙ Ayarlar'dan enlem/boylamı elle yaz."
+        )
     }
 
     private enum class Who { USER, BOT, INFO }
@@ -267,9 +703,10 @@ class MainActivity : Activity() {
 
     // ---------------- Komut çalıştırma ----------------
 
-    private fun submit(raw: String) {
+    private fun submit(raw: String, fromTile: Boolean = false) {
         val text = raw.trim()
         if (text.isEmpty() || busy) return
+        if (!fromTile) showPanel(false)
         input.setText("")
         remember(text)
         addBubble(text, Who.USER)
@@ -287,8 +724,10 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 replies.forEach { addBubble(it, Who.BOT) }
+                if (panel.visibility == View.VISIBLE && replies.isNotEmpty()) showResult(replies.joinToString("\n\n"))
                 setBusy(false)
                 refreshPermButton()
+                refreshPrayerCard()
             }
         }.start()
     }
@@ -443,8 +882,8 @@ class MainActivity : Activity() {
     private fun updateWakeChip() {
         if (!::wakeChip.isInitialized) return
         val on = WakeService.isEnabled(this)
-        wakeChip.text = if (on) "👂 Uyandırma: Açık" else "👂 Uyandırma: Kapalı"
-        wakeChip.background = rounded(if (on) MIC_ON else CHIP, 18)
+        setTileText(wakeChip, "👂", if (on) "Uyandırma açık" else "Uyandırma kapalı")
+        wakeChip.background = rounded(if (on) MIC_ON else CHIP, 14)
     }
 
     private fun toggleWake() {
@@ -502,6 +941,16 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_LOC) {
+            val wasPending = pendingLocate
+            pendingLocate = false
+            if (locGranted()) {
+                if (wasPending) locate()
+            } else {
+                showResult("Konum izni verilmedi. ⚙ Ayarlar'dan enlem/boylamı elle de yazabilirsin.")
+            }
+            return
+        }
         if (requestCode != REQ_MIC) return
         val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
         val v = pendingVoice
@@ -681,6 +1130,57 @@ class MainActivity : Activity() {
         private const val REQ_VOICE = 41
         private const val REQ_MIC = 42
         private const val REQ_NOTIF = 43
+        private const val REQ_LOC = 44
+        private val PRAYER_BG = 0xFF173A2E.toInt()
+        private val PRAYER_BTN = 0xFF24543F.toInt()
+
+        /** Buton ekranındaki bölümler: (emoji, yazı, komut) */
+        private val SECTIONS = listOf(
+            "⚡ Hızlı" to listOf(
+                Triple("📊", "Durum", "Durum"),
+                Triple("🔦", "Fener aç", "Feneri aç"),
+                Triple("⚫", "Fener kapat", "Feneri kapat"),
+                Triple("🕐", "Saat kaç", "Saat kaç"),
+                Triple("🌙", "Gece modu", "Gece modu"),
+                Triple("☀️", "Gündüz modu", "Gündüz modu"),
+                Triple("🕌", "Vakitler", "Namaz vakitleri"),
+                Triple("⏱", "5 dk sayaç", "5 dakika zamanlayıcı"),
+            ),
+            "🔊 Ses" to listOf(
+                Triple("🔕", "Sessiz", "Sessize al"),
+                Triple("📳", "Titreşim", "Titreşime al"),
+                Triple("🔔", "Sesli", "Sessizden çık"),
+                Triple("⛔", "Rahatsız etme", "Rahatsız etmeyi aç"),
+                Triple("🔉", "Medya %30", "Medya sesi 30"),
+                Triple("🔊", "Medya %70", "Medya sesi 70"),
+                Triple("🔇", "Sesi kapat", "Sesi kapat"),
+                Triple("⏰", "Alarmlar", "Alarmları göster"),
+            ),
+            "📱 Ekran ve bağlantı" to listOf(
+                Triple("🔅", "Parlaklık %30", "Parlaklık 30"),
+                Triple("🔆", "Parlaklık %80", "Parlaklık 80"),
+                Triple("✨", "Otomatik parlaklık", "Otomatik parlaklığı aç"),
+                Triple("🌑", "Karanlık mod", "Karanlık mod"),
+                Triple("📶", "Wi-Fi", "Wi-Fi"),
+                Triple("🔵", "Bluetooth", "Bluetooth"),
+                Triple("📍", "Konum ayarı", "Konum"),
+                Triple("✈️", "Uçak modu", "Uçak modu"),
+            ),
+            "📄 Dosyalar" to listOf(
+                Triple("📝", "PDF → Word", "PDF'i Word'e çevir"),
+                Triple("📕", "Word → PDF", "Word'ü PDF yap"),
+                Triple("🖼", "Resim → PDF", "Resimleri PDF yap"),
+                Triple("📚", "PDF birleştir", "PDF'leri birleştir"),
+                Triple("🏞", "PDF → resim", "PDF'i resme çevir"),
+                Triple("📂", "Dosyayı aç", "Dosyayı aç"),
+            ),
+            "🗣 Sesli okuma" to listOf(
+                Triple("📖", "PDF oku", "PDF'i oku"),
+                Triple("📄", "Word oku", "Word'ü oku"),
+                Triple("👀", "Ekranı oku", "Ekrandaki yazıyı oku"),
+                Triple("⏹", "Dur", "Dur"),
+            ),
+        )
         private val MIC_ON = 0xFFE05A5A.toInt()
         private const val HISTORY_MAX = 20
         private val BG = 0xFF0F1A2A.toInt()
