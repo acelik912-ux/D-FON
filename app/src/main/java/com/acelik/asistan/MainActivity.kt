@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private lateinit var panelBtn: Button
     private lateinit var resultLine: TextView
     private lateinit var sectionsBox: LinearLayout
+    private lateinit var wakeBar: TextView
     private var layout: MutableList<Section> = mutableListOf()
     private lateinit var prayerInfo: TextView
     private lateinit var prayerRow: LinearLayout
@@ -160,6 +161,17 @@ class MainActivity : Activity() {
         panelBtn = smallButton("⊞ Butonlar") { showPanel(panel.visibility != View.VISIBLE) }
         top.addView(panelBtn)
         root.addView(top)
+
+        // En üstte, her zaman görünen büyük aç/kapat düğmesi: "bir iki üç fon" dinlemesi
+        wakeBar = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 16f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            elevation = dp(3).toFloat()
+            setOnClickListener { toggleWake() }
+        }
+        root.addView(wakeBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(12), 0, dp(12), dp(8)) })
 
         chat = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1202,8 +1214,14 @@ class MainActivity : Activity() {
     }
 
     private fun updateWakeChip() {
-        if (!::wakeChip.isInitialized) return
         val on = WakeService.isEnabled(this)
+        if (::wakeBar.isInitialized) {
+            wakeBar.text = if (on) "🎙  Sesle uyandırma AÇIK  —  kapatmak için dokun"
+            else "🔇  Sesle uyandırma KAPALI  —  açmak için dokun"
+            wakeBar.setTextColor(if (on) Color.WHITE else 0xFFCFD6E0.toInt())
+            wakeBar.background = rounded(if (on) WAKE_ON else WAKE_OFF, 16)
+        }
+        if (!::wakeChip.isInitialized) return
         setTileText(wakeChip, "👂", if (on) "Uyandırma açık" else "Uyandırma kapalı")
         wakeChip.background = rounded(if (on) MIC_ON else CHIP, 14)
     }
@@ -1453,6 +1471,8 @@ class MainActivity : Activity() {
         private const val REQ_MIC = 42
         private const val REQ_NOTIF = 43
         private const val REQ_LOC = 44
+        private val WAKE_ON = 0xFF1E8E5A.toInt()
+        private val WAKE_OFF = 0xFF3A4458.toInt()
         private val APP_BG = 0xFF2C3E5C.toInt()
         private val LOCKED_BG = 0xFF4A2F55.toInt()
         private const val HIDE_TIP =
