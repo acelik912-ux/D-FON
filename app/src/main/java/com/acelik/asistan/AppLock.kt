@@ -58,7 +58,9 @@ class AppLockService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (ignored(pkg)) return
 
-        if (pkg != session) session = null // başka bir uygulamaya geçildi: oturum bitti
+        // Başka bir uygulamaya (ana ekran dahil) geçildiyse oturum biter.
+        // İzin penceresi gibi simgesi olmayan sistem ekranları oturumu bozmaz.
+        if (pkg != session && isRealApp(pkg)) session = null
         if (!AppLock.isLocked(this, pkg)) return
         if (session == pkg) return
         if (AppLock.takePass(this, pkg)) {
@@ -80,6 +82,17 @@ class AppLockService : AccessibilityService() {
             }
             Toast.makeText(this, "🔒 $name sadece D-FON'dan açılır.", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private val realCache = HashMap<String, Boolean>()
+
+    private fun isRealApp(pkg: String): Boolean = realCache.getOrPut(pkg) {
+        packageManager.getLaunchIntentForPackage(pkg) != null || isHome(pkg)
+    }
+
+    private fun isHome(pkg: String): Boolean {
+        val i = android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME)
+        return packageManager.queryIntentActivities(i, 0).any { it.activityInfo.packageName == pkg }
     }
 
     /** Klavye, bildirim perdesi, sistem pencereleri ve D-FON'un kendisi oturumu bozmasın. */
