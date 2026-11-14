@@ -544,6 +544,12 @@ class MainActivity : Activity() {
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(10), 0, dp(2))
         }
+        val enabledBox = CheckBox(this).apply {
+            text = "Ezanda sessize al (açık)"
+            textSize = 16f
+            isChecked = true
+        }
+        box.addView(enabledBox)
         box.addView(label("Hangi vakitlerde sessize alınsın?"))
         val sel = Prayer.selected(this)
         val checks = Prayer.SLOTS.map { (name, _) ->
@@ -599,11 +605,43 @@ class MainActivity : Activity() {
                 if (parts.size == 2 && parts[0] in -66.0..66.0 && parts[1] in -180.0..180.0) {
                     Prayer.setLocation(this, parts[0], parts[1])
                 }
+                if (enabledBox.isChecked && !Prayer.hasLocation(this)) {
+                    showResult("Kaydedildi ama konum yok. \"📍 Konumu bul\"a bas, sonra \"Ezanda sessiz\" düğmesiyle aç.")
+                    refreshPrayerCard()
+                    return@setPositiveButton
+                }
+                if (enabledBox.isChecked != Prayer.isEnabled(this)) {
+                    if (enabledBox.isChecked) togglePrayer() else Prayer.setEnabled(this, false)
+                } else {
+                    Prayer.schedule(this)
+                }
                 refreshPrayerCard()
-                showResult("Kaydedildi.\n\n" + Prayer.todayText(this))
+                if (!enabledBox.isChecked || resultLine.visibility != View.VISIBLE || !Prayer.isEnabled(this)) {
+                    showResult("Kaydedildi.\n\n" + Prayer.todayText(this))
+                }
             }
+            .setNeutralButton("🧪 Şimdi dene (1 dk)") { _, _ -> testSilence() }
             .setNegativeButton("İptal", null)
             .show()
+    }
+
+    /** Ezanı beklemeden: telefonu 1 dakika sessize alıp geri açar. */
+    private fun testSilence() {
+        if (Prayer.mode(this) == "sessiz" && !phone.hasDndAccess()) {
+            AlertDialog.Builder(this)
+                .setTitle("Önce bir izin")
+                .setMessage(
+                    "Tam sessize alabilmem için \"Rahatsız Etmeyin erişimi\" gerekli. " +
+                        "Açılan listede D-FON'u açıp geri dön, sonra tekrar dene."
+                )
+                .setPositiveButton("İzni aç") { _, _ -> phone.requestDndAccess() }
+                .setNegativeButton("Titreşimle dene") { _, _ ->
+                    showResult("🧪 Deneme: " + Prayer.silenceNow(this, "Deneme", 1))
+                }
+                .show()
+            return
+        }
+        showResult("🧪 Deneme: " + Prayer.silenceNow(this, "Deneme", 1))
     }
 
     // ---------------- Konum (GPS, internetsiz) ----------------

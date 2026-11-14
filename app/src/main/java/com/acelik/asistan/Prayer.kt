@@ -145,10 +145,11 @@ object Prayer {
 
     // ---------------- sessize alma / geri alma ----------------
 
-    fun silenceNow(c: Context, name: String) {
+    /** @return yapılanı anlatan kısa metin */
+    fun silenceNow(c: Context, name: String, minutesOverride: Int? = null): String {
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val p = prefs(c)
-        val dur = duration(c)
+        val dur = minutesOverride ?: duration(c)
         // Kullanıcı zaten sessiz/titreşimdeyse dokunma
         if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
             var target = if (mode(c) == "titresim") AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_SILENT
@@ -157,7 +158,7 @@ object Prayer {
             } catch (e: SecurityException) {
                 // Rahatsız Etmeyin izni yoksa en azından titreşime al
                 target = AudioManager.RINGER_MODE_VIBRATE
-                try { audio.ringerMode = target } catch (ignored: Exception) { return }
+                try { audio.ringerMode = target } catch (ignored: Exception) { return "Sessize alınamadı: izin yok." }
             }
             val until = System.currentTimeMillis() + dur * 60_000L
             p.edit()
@@ -172,7 +173,10 @@ object Prayer {
                 "Telefon ${if (audio.ringerMode == AudioManager.RINGER_MODE_SILENT) "sessizde" else "titreşimde"}; " +
                     "${fmt(until)}'de tekrar sesli olacak."
             )
+            val how = if (audio.ringerMode == AudioManager.RINGER_MODE_SILENT) "sessize" else "titreşime"
+            return "Telefon $how alındı; ${fmt(until)}'de tekrar sesli olacak."
         }
+        return "Telefon zaten sessiz ya da titreşimde olduğu için dokunmadım. Önce sesli yapıp tekrar dene."
     }
 
     fun restore(c: Context) {
