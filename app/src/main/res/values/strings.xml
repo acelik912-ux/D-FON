@@ -5,4 +5,7 @@
     <string name="screen_read_label">D-FON Ekran Okuma</string>
     <string name="screen_read_summary">Erişilebilirlik düğmesine basınca ekrandaki yazıyı sesli okur</string>
     <string name="screen_read_desc">Açınca ekranda küçük bir erişilebilirlik düğmesi çıkar. Ona bastığında D-FON o an ekranda görünen yazıları sesli okur; tekrar basınca susar. Okunan yazılar hiçbir yere kaydedilmez ve gönderilmez. Şifre alanları okunmaz.</string>
+    <string name="lock_label">D-FON Uygulama Kilidi</string>
+    <string name="lock_summary">Seçtiğin uygulamalar sadece D-FON\'dan açılır</string>
+    <string name="lock_desc">Açınca, D-FON\'da kilitlediğin uygulamalar ana ekrandan, son uygulamalardan ya da bildirimden açılmaya çalışılırsa telefon ana ekrana döner. Bu uygulamalar sadece D-FON\'daki düğmeleriyle açılır. Sadece o an hangi uygulamanın açık olduğuna bakılır; ekrandaki hiçbir şey okunmaz, kaydedilmez ya da gönderilmez.</string>
 </resources>

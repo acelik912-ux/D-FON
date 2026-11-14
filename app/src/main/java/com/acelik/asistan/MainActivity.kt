@@ -44,6 +44,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
+import org.json.JSONObject
 import android.view.ViewGroup
 
 class MainActivity : Activity() {
@@ -63,7 +64,8 @@ class MainActivity : Activity() {
     private lateinit var panel: ScrollView
     private lateinit var panelBtn: Button
     private lateinit var resultLine: TextView
-    private lateinit var appGrid: LinearLayout
+    private lateinit var sectionsBox: LinearLayout
+    private var layout: MutableList<Section> = mutableListOf()
     private lateinit var prayerInfo: TextView
     private lateinit var prayerRow: LinearLayout
     private lateinit var prayerToggle: TextView
@@ -112,6 +114,12 @@ class MainActivity : Activity() {
         updateWakeChip()
         Prayer.recover(this)
         if (::prayerRow.isInitialized) refreshPrayerCard()
+        if (::sectionsBox.isInitialized) {
+            refreshSections()
+            if (AppLock.locked(this).isNotEmpty() && !AppLock.serviceEnabled(this)) {
+                showResult("⚠ Uygulama kilidi çalışmıyor: Erişilebilirlik → Yüklü uygulamalar → \"D-FON Uygulama Kilidi\"ni aç.")
+            }
+        }
     }
 
     override fun onPause() {
@@ -260,15 +268,25 @@ class MainActivity : Activity() {
         col.addView(resultLine, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), 0, dp(3), dp(8)) })
         col.addView(buildPrayerCard(), LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), 0, dp(3), dp(4)) })
 
-        col.addView(sectionTitle("📱 Uygulamalarım", "basılı tut: kaldır"))
-        appGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(appGrid)
-        refreshAppGrid()
-
-        for ((title, items) in SECTIONS) {
-            col.addView(sectionTitle(title, null))
-            col.addView(grid(items.map { (emoji, label, cmd) -> tile(emoji, label) { submit(cmd, true) } }))
-        }
+        col.addView(TextView(this).apply {
+            text = "İpucu: Bir düğmeye basılı tutarak başka bölüme taşıyabilir, yerini değiştirebilir, " +
+                "kilitleyebilir ya da kaldırabilirsin. Bölüm adına basılı tutarak bölümü düzenlersin."
+            textSize = 11.5f
+            setTextColor(0xFF6F7A8C.toInt())
+            setPadding(dp(4), dp(8), dp(4), 0)
+        })
+        sectionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(sectionsBox)
+        refreshSections()
+        col.addView(TextView(this).apply {
+            text = "➕ Yeni bölüm ekle"
+            gravity = Gravity.CENTER
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            background = rounded(CHIP, 14)
+            setPadding(0, dp(10), 0, dp(10))
+            setOnClickListener { newSection(null) }
+        }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), dp(10), dp(3), 0) })
 
         wakeChip = tile("👂", "Uyandırma") { toggleWake() }
         col.addView(sectionTitle("🛠 D-FON", null))
@@ -321,9 +339,25 @@ class MainActivity : Activity() {
         return g
     }
 
-    // ---------------- Uygulama kısayolları ----------------
+    // ---------------- Düzenlenebilir bölümler ----------------
 
-    private fun shortcuts(): List<String> {
+    /** Bir düğme: komut (emoji, yazı, komut) ya da uygulama (paket adı). */
+    private class Item(val emoji: String = "", val label: String = "", val cmd: String = "", val pkg: String? = null) {
+        fun json(): JSONObject =
+            if (pkg != null) JSONObject().put("a", pkg)
+            else JSONObject().put("e", emoji).put("l", label).put("c", cmd)
+
+        companion object {
+            fun from(o: JSONObject) =
+                if (o.has("a")) Item(pkg = o.getString("a"))
+                else Item(o.optString("e"), o.optString("l"), o.optString("c"))
+        }
+    }
+
+    private class Section(var title: String, val items: MutableList<Item>)
+
+    /** Eski sürümdeki "Uygulamalarım" kısayolları (ilk açılışta yeni düzene taşınır). */
+    private fun oldShortcuts(): List<String> {
         val raw = getSharedPreferences("dfon", MODE_PRIVATE).getString("kisayollar", null) ?: return emptyList()
         return try {
             val a = JSONArray(raw)
@@ -333,52 +367,248 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun saveShortcuts(list: List<String>) {
-        getSharedPreferences("dfon", MODE_PRIVATE).edit()
-            .putString("kisayollar", JSONArray(list.distinct()).toString()).apply()
-    }
-
-    private fun refreshAppGrid() {
-        appGrid.removeAllViews()
-        val byPkg = files.installedApps().associateBy { it.pkg }
-        val tiles: List<View> = shortcuts().mapNotNull { byPkg[it] }.map { appTile(it) } +
-            tile("➕", "Uygulama ekle") { showAddShortcut() }
-        appGrid.addView(grid(tiles))
-    }
-
-    private fun appTile(app: FileTools.App) = TextView(this).apply {
-        text = app.label
-        gravity = Gravity.CENTER
-        textSize = 11f
-        setTextColor(Color.WHITE)
-        maxLines = 2
-        ellipsize = TextUtils.TruncateAt.END
-        background = rounded(CHIP, 14)
-        setPadding(dp(3), dp(8), dp(3), dp(4))
-        try {
-            val d = packageManager.getApplicationIcon(app.pkg)
-            val size = dp(32)
-            d.setBounds(0, 0, size, size)
-            setCompoundDrawables(null, d, null, null)
-            compoundDrawablePadding = dp(3)
-        } catch (ignored: Exception) {
+    private fun loadLayout(): MutableList<Section> {
+        val raw = getSharedPreferences("dfon", MODE_PRIVATE).getString("duzen", null)
+        if (raw != null) {
+            try {
+                val arr = JSONArray(raw)
+                return (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    val items = o.getJSONArray("i")
+                    Section(o.getString("t"), (0 until items.length()).map { k -> Item.from(items.getJSONObject(k)) }.toMutableList())
+                }.toMutableList()
+            } catch (e: Exception) {
+            }
         }
+        val list = mutableListOf(Section("📱 Uygulamalarım", oldShortcuts().map { Item(pkg = it) }.toMutableList()))
+        SECTIONS.forEach { (t, items) ->
+            list.add(Section(t, items.map { (e, l, c) -> Item(e, l, c) }.toMutableList()))
+        }
+        return list
+    }
+
+    private fun saveLayout() {
+        val arr = JSONArray()
+        layout.forEach { sec ->
+            val items = JSONArray()
+            sec.items.forEach { items.put(it.json()) }
+            arr.put(JSONObject().put("t", sec.title).put("i", items))
+        }
+        getSharedPreferences("dfon", MODE_PRIVATE).edit().putString("duzen", arr.toString()).apply()
+    }
+
+    private fun refreshSections() {
+        if (layout.isEmpty()) layout = loadLayout()
+        sectionsBox.removeAllViews()
+        val apps = files.installedApps().associateBy { it.pkg }
+        layout.forEachIndexed { si, sec ->
+            sectionsBox.addView(sectionTitle(sec.title, null).apply {
+                setOnLongClickListener { sectionMenu(si); true }
+            })
+            val tiles = mutableListOf<View>()
+            sec.items.forEachIndexed { ii, item ->
+                val v: View? = if (item.pkg != null) apps[item.pkg]?.let { appTile(it) }
+                else tile(item.emoji, item.label) { submit(item.cmd, true) }
+                if (v != null) {
+                    v.setOnLongClickListener { itemMenu(si, ii); true }
+                    tiles.add(v)
+                }
+            }
+            tiles.add(tile("➕", "Ekle") { addMenu(si) })
+            sectionsBox.addView(grid(tiles))
+        }
+    }
+
+    private fun appLabel(pkg: String) = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: Exception) {
+        pkg
+    }
+
+    /** Uygulama düğmesi: simgesiz, sadece adı. */
+    private fun appTile(app: FileTools.App) = TextView(this).apply {
+        val locked = AppLock.isLocked(this@MainActivity, app.pkg)
+        text = if (locked) "🔒\n${app.label}" else app.label
+        gravity = Gravity.CENTER
+        textSize = 12.5f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(Color.WHITE)
+        maxLines = 3
+        ellipsize = TextUtils.TruncateAt.END
+        background = rounded(if (locked) LOCKED_BG else APP_BG, 14)
+        setPadding(dp(4), dp(6), dp(4), dp(6))
         setOnClickListener { showResult(files.openApp(app)) }
-        setOnLongClickListener {
-            AlertDialog.Builder(this@MainActivity)
-                .setMessage("${app.label} kısayollardan kaldırılsın mı?")
-                .setPositiveButton("Kaldır") { _, _ ->
-                    saveShortcuts(shortcuts() - app.pkg)
-                    refreshAppGrid()
+    }
+
+    private fun itemMenu(si: Int, ii: Int) {
+        val sec = layout[si]
+        val item = sec.items[ii]
+        val pkg = item.pkg
+        val name = if (pkg != null) appLabel(pkg) else item.label
+        val opts = mutableListOf<Pair<String, () -> Any?>>()
+        opts += "📂 Başka bölüme taşı" to { moveDialog(si, ii) }
+        if (ii > 0) opts += "⬅ Öne al" to { swap(si, ii, ii - 1) }
+        if (ii < sec.items.size - 1) opts += "➡ Arkaya al" to { swap(si, ii, ii + 1) }
+        if (pkg != null) {
+            opts += (if (AppLock.isLocked(this, pkg)) "🔓 Kilidi kaldır (her yerden açılsın)"
+            else "🔒 Sadece D-FON'dan açılsın") to { toggleLock(pkg) }
+        }
+        opts += "🗑 Butonu kaldır" to {
+            sec.items.removeAt(ii)
+            saveLayout()
+            if (pkg != null) unlockIfOrphan(pkg)
+            refreshSections()
+        }
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setItems(opts.map { it.first }.toTypedArray()) { _, w -> opts[w].second() }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun swap(si: Int, a: Int, b: Int) {
+        val items = layout[si].items
+        val t = items[a]
+        items[a] = items[b]
+        items[b] = t
+        saveLayout()
+        refreshSections()
+    }
+
+    private fun moveDialog(si: Int, ii: Int) {
+        val targets = layout.indices.filter { it != si }
+        val names = targets.map { layout[it].title } + "➕ Yeni bölüm…"
+        AlertDialog.Builder(this)
+            .setTitle("Hangi bölüme?")
+            .setItems(names.toTypedArray()) { _, w ->
+                val item = layout[si].items.removeAt(ii)
+                if (w < targets.size) {
+                    layout[targets[w]].items.add(item)
+                    saveLayout()
+                    refreshSections()
+                } else {
+                    saveLayout()
+                    newSection(item)
+                }
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
+    }
+
+    /** Yeni bölüm açar; item verilirse içine koyar (iptal edilirse eski yerine değil "Uygulamalarım"a döner). */
+    private fun newSection(item: Item?) {
+        val input = EditText(this).apply { hint = "Bölüm adı (ör. 👦 Oğlum için)" }
+        AlertDialog.Builder(this)
+            .setTitle("Yeni bölüm")
+            .setView(input.also { it.setPadding(dp(20), dp(12), dp(20), dp(12)) })
+            .setPositiveButton("Ekle") { _, _ ->
+                val name = input.text.toString().trim().ifEmpty { "Yeni bölüm" }
+                layout.add(Section(name, if (item != null) mutableListOf(item) else mutableListOf()))
+                saveLayout()
+                refreshSections()
+            }
+            .setNegativeButton("Vazgeç") { _, _ ->
+                if (item != null) {
+                    (layout.firstOrNull() ?: Section("📱 Uygulamalarım", mutableListOf()).also { layout.add(it) }).items.add(item)
+                    saveLayout()
+                    refreshSections()
+                }
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun sectionMenu(si: Int) {
+        val sec = layout[si]
+        val opts = mutableListOf<Pair<String, () -> Any?>>()
+        opts += "✏ Adını değiştir" to {
+            val input = EditText(this).apply { setText(sec.title) }
+            AlertDialog.Builder(this)
+                .setTitle("Bölüm adı")
+                .setView(input.also { it.setPadding(dp(20), dp(12), dp(20), dp(12)) })
+                .setPositiveButton("Kaydet") { _, _ ->
+                    sec.title = input.text.toString().trim().ifEmpty { sec.title }
+                    saveLayout()
+                    refreshSections()
                 }
                 .setNegativeButton("Vazgeç", null)
                 .show()
-            true
         }
+        if (si > 0) opts += "⬆ Yukarı taşı" to { layout.add(si - 1, layout.removeAt(si)); saveLayout(); refreshSections() }
+        if (si < layout.size - 1) opts += "⬇ Aşağı taşı" to { layout.add(si + 1, layout.removeAt(si)); saveLayout(); refreshSections() }
+        opts += "🗑 Bölümü sil" to {
+            AlertDialog.Builder(this)
+                .setMessage("\"${sec.title}\" bölümü ve içindeki ${sec.items.size} düğme silinsin mi?")
+                .setPositiveButton("Sil") { _, _ ->
+                    layout.removeAt(si)
+                    saveLayout()
+                    sec.items.mapNotNull { it.pkg }.forEach { unlockIfOrphan(it) }
+                    refreshSections()
+                }
+                .setNegativeButton("Vazgeç", null)
+                .show()
+        }
+        AlertDialog.Builder(this)
+            .setTitle(sec.title)
+            .setItems(opts.map { it.first }.toTypedArray()) { _, w -> opts[w].second() }
+            .setNegativeButton("Kapat", null)
+            .show()
     }
 
-    private fun showAddShortcut() {
-        val have = shortcuts().toSet()
+    private fun addMenu(si: Int) {
+        val opts = listOf("📱 Uygulama ekle", "⚡ Hazır komut ekle", "✍ Kendi komutunu yaz")
+        AlertDialog.Builder(this)
+            .setTitle("${layout[si].title} — ekle")
+            .setItems(opts.toTypedArray()) { _, w ->
+                when (w) {
+                    0 -> showAddApp(si)
+                    1 -> addPresetCommand(si)
+                    else -> addCustomCommand(si)
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun addPresetCommand(si: Int) {
+        val all = SECTIONS.flatMap { it.second }
+        AlertDialog.Builder(this)
+            .setTitle("Komut seç")
+            .setItems(all.map { "${it.first}  ${it.second}" }.toTypedArray()) { _, w ->
+                val (e, l, c) = all[w]
+                layout[si].items.add(Item(e, l, c))
+                saveLayout()
+                refreshSections()
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun addCustomCommand(si: Int) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val label = EditText(this).apply { hint = "Düğmede yazacak (ör. Ninni)" }
+        val cmd = EditText(this).apply { hint = "Komut (ör. YouTube'da ninni izle)" }
+        box.addView(label)
+        box.addView(cmd)
+        AlertDialog.Builder(this)
+            .setTitle("Kendi komutun")
+            .setView(box)
+            .setPositiveButton("Ekle") { _, _ ->
+                val c = cmd.text.toString().trim()
+                if (c.isEmpty()) return@setPositiveButton
+                layout[si].items.add(Item("⭐", label.text.toString().trim().ifEmpty { c.take(20) }, c))
+                saveLayout()
+                refreshSections()
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
+    }
+
+    private fun showAddApp(si: Int) {
+        val have = layout.flatMap { s -> s.items.mapNotNull { it.pkg } }.toSet()
         val apps = files.installedApps().filter { it.pkg !in have }
         var shown = apps
         val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, apps.map { it.label }.toMutableList())
@@ -391,7 +621,7 @@ class MainActivity : Activity() {
         box.addView(search)
         box.addView(list, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55).toInt()))
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Butonlara uygulama ekle")
+            .setTitle("Uygulama ekle")
             .setView(box)
             .setNegativeButton("Kapat", null)
             .create()
@@ -407,14 +637,67 @@ class MainActivity : Activity() {
         })
         list.setOnItemClickListener { _, _, pos, _ ->
             val app = shown[pos]
-            saveShortcuts(shortcuts() + app.pkg)
-            // Kısayola eklenen uygulamayı D-FON sesli komutla da açabilsin
+            layout[si].items.add(Item(pkg = app.pkg))
+            saveLayout()
+            // Düğmeye eklenen uygulamayı D-FON sesli komutla da açabilsin
             files.setAllowedPackages(files.allowedPackages() + app.pkg)
-            refreshAppGrid()
-            Toast.makeText(this, "${app.label} eklendi", Toast.LENGTH_SHORT).show()
+            refreshSections()
             dialog.dismiss()
+            AlertDialog.Builder(this)
+                .setTitle(app.label)
+                .setMessage("Bu uygulama sadece D-FON'dan açılabilsin mi? (Ana ekrandan, son uygulamalardan ya da bildirimden açılmaz.)")
+                .setPositiveButton("🔒 Evet, kilitle") { _, _ -> toggleLock(app.pkg) }
+                .setNegativeButton("Hayır", null)
+                .show()
         }
         dialog.show()
+    }
+
+    // ---------------- Uygulama kilidi ----------------
+
+    private fun toggleLock(pkg: String) {
+        val name = appLabel(pkg)
+        if (AppLock.isLocked(this, pkg)) {
+            AppLock.setLocked(this, pkg, false)
+            refreshSections()
+            showResult("🔓 $name artık her yerden açılabilir.")
+            return
+        }
+        AppLock.setLocked(this, pkg, true)
+        refreshSections()
+        if (!AppLock.serviceEnabled(this)) {
+            lockSetupDialog()
+        } else {
+            showResult("🔒 $name artık sadece D-FON'dan açılır.\n\n$HIDE_TIP")
+        }
+    }
+
+    private fun lockSetupDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Kilidi bir kez açman gerekiyor")
+            .setMessage(
+                "Kilitli uygulamaların başka yerden açılmasını engelleyebilmem için:\n\n" +
+                    "1. Açılan ekranda \"Yüklü uygulamalar\"a gir.\n" +
+                    "2. \"D-FON Uygulama Kilidi\"ni seç ve aç.\n\n" +
+                    "Gri görünüp açılmıyorsa: Ayarlar → Uygulamalar → D-FON → sağ üstteki ⋮ → " +
+                    "\"Kısıtlı ayarlara izin ver\", sonra tekrar dene.\n\n" +
+                    "Bu servis sadece hangi uygulamanın açıldığına bakar; ekrandaki hiçbir şeyi okumaz ya da göndermez."
+            )
+            .setPositiveButton("Ayarları aç") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (ignored: Exception) {}
+            }
+            .setNegativeButton("Sonra", null)
+            .show()
+        showResult("🔒 Kilit kaydedildi ama \"D-FON Uygulama Kilidi\" erişilebilirlikte açılınca çalışmaya başlar.\n\n$HIDE_TIP")
+    }
+
+    /** Düğmesi kalmayan kilitli uygulama hiçbir yerden açılamaz olmasın. */
+    private fun unlockIfOrphan(pkg: String) {
+        val stillThere = layout.any { s -> s.items.any { it.pkg == pkg } }
+        if (!stillThere && AppLock.isLocked(this, pkg)) {
+            AppLock.setLocked(this, pkg, false)
+            showResult("🔓 ${appLabel(pkg)} düğmesi kaldırıldığı için kilidi de kaldırıldı.")
+        }
     }
 
     // ---------------- Namaz vakitleri kartı ----------------
@@ -1169,6 +1452,11 @@ class MainActivity : Activity() {
         private const val REQ_MIC = 42
         private const val REQ_NOTIF = 43
         private const val REQ_LOC = 44
+        private val APP_BG = 0xFF2C3E5C.toInt()
+        private val LOCKED_BG = 0xFF4A2F55.toInt()
+        private const val HIDE_TIP =
+            "İpucu: Simgesini ana ekrandan ve uygulamalar listesinden de gizlemek için ana ekranda boş bir yere " +
+                "basılı tut → Ayarlar → \"Uygulamaları gizle\" → uygulamayı seç → Bitti. Gizlesen de D-FON'daki düğmesi çalışır."
         private val PRAYER_BG = 0xFF173A2E.toInt()
         private val PRAYER_BTN = 0xFF24543F.toInt()
 

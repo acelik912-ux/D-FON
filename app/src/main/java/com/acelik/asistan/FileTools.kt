@@ -96,6 +96,7 @@ class FileTools(private val activity: Activity) {
     fun openApp(app: App): String {
         val i = pm.getLaunchIntentForPackage(app.pkg) ?: return "${app.label} açılamadı."
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        AppLock.allow(activity, app.pkg)
         activity.onMain { activity.startActivity(i) }
         return "${app.label} açıldı."
     }
@@ -192,6 +193,7 @@ class FileTools(private val activity: Activity) {
                 return "${app.label} bu dosyayla çalışamıyor ya da izinli değil."
             }
             i.setPackage(app.pkg)
+            AppLock.allow(activity, app.pkg)
             activity.onMain { activity.startActivity(i) }
             return "$ok (${app.label})."
         }
@@ -201,6 +203,7 @@ class FileTools(private val activity: Activity) {
         if (handlers.size == 1) {
             val h = handlers[0].activityInfo
             i.setClassName(h.packageName, h.name)
+            AppLock.allow(activity, h.packageName)
             activity.onMain { activity.startActivity(i) }
             return "$ok (${handlers[0].loadLabel(pm)})."
         }
@@ -210,6 +213,7 @@ class FileTools(private val activity: Activity) {
                 .setTitle("Hangi uygulama?")
                 .setItems(labels) { _, which ->
                     val h = handlers[which].activityInfo
+                    AppLock.allow(activity, h.packageName)
                     activity.startActivity(Intent(i).setClassName(h.packageName, h.name))
                 }
                 .setNegativeButton("İptal", null)
