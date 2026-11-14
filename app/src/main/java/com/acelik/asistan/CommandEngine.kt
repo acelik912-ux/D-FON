@@ -11,7 +11,8 @@ class CommandEngine(
     private val phone: PhoneTools,
     private val files: FileTools,
     private val clock: ClockTools,
-    private val ctx: android.content.Context? = null
+    private val ctx: android.content.Context? = null,
+    private val contacts: ContactTools? = null
 ) {
 
     enum class Action { PDF_TO_WORD, WORD_TO_PDF, IMAGES_TO_PDF, PDF_TO_IMAGES, MERGE_PDF, READ }
@@ -34,10 +35,13 @@ class CommandEngine(
 
         if (has(t, "yardim", "neler yapabilirsin", "ne yapabilirsin", "komutlar")) return listOf(HELP)
 
+        routineCommand(t)?.let { return it }
+        notesCommand(text, t)?.let { return listOf(it) }
         prayerCommand(t)?.let { return listOf(it) }
         stopReading(t)?.let { return listOf(it) }
         textToDocument(text)?.let { return listOf(it) }
         readCommand(t)?.let { return listOf(it) }
+        contactCommand(text, t)?.let { return listOf(it) }
         webCommand(text)?.let { return listOf(it) }
         fileCommand(t)?.let { return listOf(it) }
 
@@ -88,6 +92,121 @@ class CommandEngine(
         settingsScreen(t)?.let { return it }
         appCommand(t)?.let { return it }
         return null
+    }
+
+    // ---------------- rutinler ----------------
+
+    private var depth = 0
+
+    private fun routineCommand(t: String): List<String>? {
+        val c = ctx ?: return null
+        if (t in setOf("rutinler", "rutinlerim", "rutinleri goster", "rutin listesi", "rutinlerimi goster")) {
+            val l = Routines.all(c)
+            return listOf(
+                if (l.isEmpty()) "Henüz rutinin yok. Butonlar ekranındaki ⚡ Rutinlerim bölümünden ekleyebilirsin."
+                else "⚡ Rutinlerin:\n" + l.joinToString("\n") { r ->
+                    "• ${r.name}" + (r.time?.let { " (her gün $it)" } ?: "") + ": " + r.commands.joinToString(", ")
+                }
+            )
+        }
+        if (depth > 0) return null // rutin içinde rutin çalışmasın
+        val r = Routines.match(c, t) ?: return null
+        depth++
+        try {
+            val out = mutableListOf("▶ ${r.name}")
+            r.commands.forEach { cmd -> out.addAll(handle(cmd)) }
+            return listOf(out.joinToString("\n"))
+        } finally {
+            depth--
+        }
+    }
+
+    // ---------------- notlar ----------------
+
+    private fun notesCommand(raw: String, t: String): String? {
+        val c = ctx ?: return null
+        val tk = tokens(t)
+        // "Not al: ekmek al", "not al süt al", "bir not al: …"
+        val colon = raw.indexOf(':')
+        if (colon > 0) {
+            val head = norm(raw.substring(0, colon))
+            if (head in setOf("not", "not al", "not et", "not yaz", "bir not al", "notla", "not ekle")) {
+                val body = raw.substring(colon + 1).trim()
+                if (body.isEmpty()) return "Ne not alayım? Örn: \"Not al: ekmek al\""
+                Notes.add(c, body)
+                return "📝 Not alındı: $body"
+            }
+        }
+        if (tk.size > 2 && tk[0] == "not" && tk[1] in setOf("al", "et", "yaz", "ekle")) {
+            val body = raw.trim().split(Regex("\\s+")).drop(2).joinToString(" ")
+            Notes.add(c, body)
+            return "📝 Not alındı: $body"
+        }
+        if (has(t, "notu sil", "notlari sil", "notlarimi sil", "notumu sil")) {
+            if (has(t, "hepsini", "tum", "butun", "notlari sil", "notlarimi sil")) {
+                Notes.clear(c)
+                return "🗑 Tüm notlar silindi."
+            }
+            val all = Notes.all(c)
+            if (all.isEmpty()) return "Silinecek not yok."
+            val idx = if (has(t, "son")) all.size - 1 else (number(t)?.minus(1) ?: (all.size - 1))
+            val n = Notes.remove(c, idx) ?: return "O numarada not yok. \"Notlarım\" diyerek listeye bakabilirsin."
+            return "🗑 Silindi: ${n.text}"
+        }
+        if (tk.any { it.startsWith("notlar") || it == "notum" || it == "notumu" }) {
+            if (tk.any { it.startsWith("oku") }) Speaker.speak(c, Notes.speakText(c))
+            return Notes.listText(c)
+        }
+        return null
+    }
+
+    // ---------------- kişiler ----------------
+
+    private fun contactCommand(raw: String, t: String): String? {
+        val ct = contacts ?: return null
+        val tk = tokens(t)
+        val mi = tk.indexOf("mesaj")
+        if (mi > 0 && (mi == tk.size - 1 || raw.contains(':') ||
+                tk.drop(mi + 1).all { it in setOf("yaz", "at", "gonder", "yolla") })
+        ) {
+            val name = tk.subList(0, mi).joinToString(" ")
+            val body = raw.substringAfter(':', "").trim()
+            return withContact(ct, name) { ct.message(it, body) }
+        }
+        if (tk.size >= 2 && tk.last() == "ara") {
+            var nameTk = tk.dropLast(1)
+            if (nameTk.lastOrNull() == "telefonla") nameTk = nameTk.dropLast(1)
+            val first = nameTk.firstOrNull() ?: return null
+            if (listOf("google", "internet", "web", "youtube", "vikipedi", "wikipedi", "harita").any { first.startsWith(it) }) return null
+            val real = nameTk.filter { it.length > 3 || it !in setOf("i", "u", "yi", "yu", "e", "a", "ye", "ya") }
+            if (!ct.hasContacts()) {
+                if (real.size == 1) {
+                    ct.requestPermissions()
+                    return "📇 Rehberine bakabilmem için izin ver, sonra tekrar söyle. (İnternette aramak istersen \"internette … ara\" de.)"
+                }
+                return null
+            }
+            val hits = ct.find(nameTk.joinToString(" "))
+            if (hits.isEmpty()) return null // rehberde yoksa internette ara
+            return pickContact(ct, hits) { ct.call(it) }
+        }
+        return null
+    }
+
+    private fun withContact(ct: ContactTools, name: String, action: (ContactTools.Contact) -> String): String {
+        if (!ct.hasContacts()) {
+            ct.requestPermissions()
+            return "📇 Rehberine bakabilmem için izin ver, sonra tekrar söyle."
+        }
+        val hits = ct.find(name)
+        if (hits.isEmpty()) return "📇 Rehberde \"$name\" bulamadım."
+        return pickContact(ct, hits, action)
+    }
+
+    private fun pickContact(ct: ContactTools, hits: List<ContactTools.Contact>, action: (ContactTools.Contact) -> String): String {
+        if (hits.size == 1) return action(hits[0])
+        ct.choose(hits) { action(it) }
+        return "📇 Birden fazla kişi buldum, hangisi olduğunu seç."
     }
 
     // ---------------- namaz vakitleri ----------------
@@ -644,6 +763,9 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 🔊 Ses: "medya sesi 50", "zil sesini artır", "sesi kapat", "sessize al", "titreşime al", "sessizden çık", "rahatsız etmeyi aç"
 🔦 "feneri aç", "gece modu", "gündüz modu", "durum" (pil ve ayarlar)
 ⏰ Saat: "alarm 7:30", "sabah 6'da uyandır", "akşam 9 buçukta alarm kur", "5 dakika zamanlayıcı", "1 saat 20 dakika sayaç kur", "alarmları göster", "saat kaç", "bugün günlerden ne"
+⚡ Rutinler: "uyku modu", "sabah modu", "rutinlerim" (Butonlar ekranından kendi rutinini ekle; istersen her gün belli saatte çalışır)
+📝 Notlar: "not al: ekmek al", "notlarım", "notlarımı oku", "son notu sil"
+📞 Kişiler: "annemi ara", "Ahmet'i ara", "Ahmet'e mesaj yaz: geliyorum"
 🕌 Namaz: "namaz vakitleri", "ezanda sessize al", "ezanda sessize almayı kapat"
 ⚙ Ayar ekranları: "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu", "duvar kağıdı", "konum", "uçak modu"…
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)

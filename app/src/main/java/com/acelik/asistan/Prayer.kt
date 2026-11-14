@@ -8,6 +8,12 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.graphics.drawable.Icon
 import android.media.AudioManager
 import android.os.Build
 import java.text.SimpleDateFormat
@@ -34,6 +40,9 @@ object Prayer {
     private const val ACTION_SILENCE = "com.acelik.asistan.NAMAZ_SESSIZ"
     private const val ACTION_RESTORE = "com.acelik.asistan.NAMAZ_SESLI"
     private const val NOTIF_ID = 7001
+    private const val NOTIF_CD = 7002
+    private const val CHANNEL_CD = "sayac"
+    private const val ACTION_TICK = "com.acelik.asistan.NAMAZ_SAYAC"
     private const val CHANNEL = "namaz"
 
     private fun prefs(c: Context) = c.getSharedPreferences("namaz", Context.MODE_PRIVATE)
@@ -54,6 +63,7 @@ object Prayer {
     fun setLocation(c: Context, lat: Double, lon: Double) {
         prefs(c).edit().putFloat("lat", lat.toFloat()).putFloat("lon", lon.toFloat()).apply()
         schedule(c)
+        refreshExtras(c)
     }
     fun locationText(c: Context) =
         if (!hasLocation(c)) "Konum yok" else "%.3f, %.3f".format(Locale.US, lat(c), lon(c))
@@ -111,6 +121,101 @@ object Prayer {
             else "\nEzanda sessize alma kapalı."
         )
         return sb.toString()
+    }
+
+    // ---------------- üst çubukta geri sayım ----------------
+
+    fun countdownEnabled(c: Context) = prefs(c).getBoolean("sayac", true)
+    fun setCountdownEnabled(c: Context, on: Boolean) {
+        prefs(c).edit().putBoolean("sayac", on).apply()
+        updateCountdown(c)
+    }
+
+    /** Altı vakit içinden sıradaki (ad, zaman). */
+    fun nextTime(c: Context): Pair<String, Long>? {
+        val now = System.currentTimeMillis()
+        for (d in 0..1) {
+            val t = timesFor(c, d) ?: return null
+            for (i in 0 until 6) if (t[i] > now) return PrayerTimes.NAMES[i] to t[i]
+        }
+        return null
+    }
+
+    fun durationText(mins: Int): String =
+        if (mins >= 60) "${mins / 60} sa ${mins % 60} dk" else "$mins dk"
+
+    /** Widget ve üst çubuk sayacını tazeler. */
+    fun refreshExtras(c: Context) {
+        updateCountdown(c)
+        PrayerWidget.updateAll(c)
+    }
+
+    private fun tickIntent(c: Context) = PendingIntent.getBroadcast(
+        c, 9, Intent(c, PrayerReceiver::class.java).setAction(ACTION_TICK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    fun updateCountdown(c: Context) {
+        val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val tick = tickIntent(c)
+        am.cancel(tick)
+        val next = if (countdownEnabled(c) && hasLocation(c)) nextTime(c) else null
+        if (next == null) {
+            nm.cancel(NOTIF_CD)
+            return
+        }
+        val now = System.currentTimeMillis()
+        val mins = Math.ceil((next.second - now) / 60_000.0).toInt().coerceAtLeast(0)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_CD, "Sıradaki vakte kalan süre", NotificationManager.IMPORTANCE_LOW).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+            }
+        )
+        val label = if (mins < 100) "$mins" else "${mins / 60}s"
+        val t = timesFor(c, 0)
+        val all = if (t == null) "" else PrayerTimes.NAMES.indices.joinToString("  ·  ") { "${PrayerTimes.NAMES[it]} ${fmt(t[it])}" }
+        val open = PendingIntent.getActivity(c, 4, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(c, CHANNEL_CD)
+            .setSmallIcon(Icon.createWithBitmap(numberBitmap(label)))
+            .setContentTitle("${next.first} vaktine ${durationText(mins)} kaldı (${fmt(next.second)})")
+            .setContentText(all)
+            .setStyle(Notification.BigTextStyle().bigText(all.replace("  ·  ", "\n")))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setCategory(Notification.CATEGORY_STATUS)
+            .setContentIntent(open)
+            .build()
+        try { nm.notify(NOTIF_CD, n) } catch (ignored: SecurityException) {}
+
+        // Sayı değişeceği an tekrar güncelle. RTC (uyandırmayan) alarm: telefon uykudayken pil harcamaz.
+        val at = when {
+            mins == 0 -> next.second + 1000
+            mins >= 100 -> minOf(now + 5 * 60_000L, next.second - 99 * 60_000L)
+            else -> next.second - (mins - 1) * 60_000L
+        }.coerceAtLeast(now + 1000)
+        val exactOk = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
+        if (exactOk) am.setExact(AlarmManager.RTC, at, tick) else am.set(AlarmManager.RTC, at, tick)
+    }
+
+    /** Durum çubuğunda görünecek, içinde sayı yazan küçük simge. */
+    private fun numberBitmap(text: String): Bitmap {
+        val size = 96
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+            textSize = if (text.length <= 2) 78f else 60f
+        }
+        while (p.measureText(text) > size - 4 && p.textSize > 20f) p.textSize -= 2f
+        val y = size / 2f - (p.descent() + p.ascent()) / 2f
+        cv.drawText(text, size / 2f, y, p)
+        return bmp
     }
 
     // ---------------- zamanlama ----------------
@@ -239,7 +344,12 @@ object Prayer {
             ACTION_RESTORE -> {
                 restore(c)
             }
-            else -> recover(c) // açılış, saat/dilim değişimi, güncelleme
+            ACTION_TICK -> updateCountdown(c)
+            else -> { // açılış, saat/dilim değişimi, güncelleme
+                recover(c)
+                refreshExtras(c)
+                Routines.schedule(c)
+            }
         }
     }
 }

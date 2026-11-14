@@ -71,12 +71,17 @@ object Speaker {
         return r >= TextToSpeech.LANG_AVAILABLE
     }
 
+    /** En son okumanın başladığı an (sesli cevabın, başlamış bir okumayı bölmemesi için). */
+    @Volatile
+    var lastStart = 0L
+
     @Synchronized
     fun speak(c: Context, text: String): Boolean {
         val clean = text.replace(Regex("[ \\t]+"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
         if (clean.isEmpty()) return false
         ensure(c)
         speaking = true
+        lastStart = System.currentTimeMillis()
         if (!ready) {
             queue.clear()
             queue.add(clean)

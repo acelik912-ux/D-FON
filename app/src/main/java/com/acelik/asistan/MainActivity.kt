@@ -66,6 +66,10 @@ class MainActivity : Activity() {
     private lateinit var resultLine: TextView
     private lateinit var sectionsBox: LinearLayout
     private lateinit var wakeBar: TextView
+    private lateinit var routinesBox: LinearLayout
+    private lateinit var voiceReplyTile: TextView
+    /** Son komut sesle mi verildi (sesli cevap için) */
+    private var fromVoice = false
     private var layout: MutableList<Section> = mutableListOf()
     private lateinit var prayerInfo: TextView
     private lateinit var prayerRow: LinearLayout
@@ -84,7 +88,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         phone = PhoneTools(this)
         files = FileTools(this)
-        engine = CommandEngine(phone, files, ClockTools(this), this)
+        engine = CommandEngine(phone, files, ClockTools(this), this, ContactTools(this))
         window.statusBarColor = BG
         window.navigationBarColor = BG
         setContentView(buildUi())
@@ -98,12 +102,37 @@ class MainActivity : Activity() {
             addBubble("Açabileceğim uygulamaları seçmek için üstteki \"Uygulamalar\" düğmesine bas.", Who.INFO)
         }
         handleWake(intent)
+        handleExtras(intent)
+        Prayer.refreshExtras(this)
+        if (Build.VERSION.SDK_INT >= 33 && Prayer.hasLocation(this) && Prayer.countdownEnabled(this) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
+        }
+    }
+
+    /** Rutin saati geldiğinde ya da bildirim paneli kutucuğundan açıldığında. */
+    private fun handleExtras(i: Intent?) {
+        if (i == null) return
+        i.getStringExtra(Routines.EXTRA_ROUTINE)?.let { name ->
+            val background = i.getBooleanExtra(Routines.EXTRA_BACKGROUND, false)
+            i.removeExtra(Routines.EXTRA_ROUTINE)
+            addBubble("⏰ $name", Who.USER)
+            runInBackground({ engine.handle(name) }) {
+                if (background) moveTaskToBack(true)
+            }
+        }
+        if (i.getBooleanExtra(EXTRA_TILE_WAKE, false)) {
+            i.removeExtra(EXTRA_TILE_WAKE)
+            if (!WakeService.isEnabled(this)) toggleWake()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleWake(intent)
+        handleExtras(intent)
     }
 
     override fun onResume() {
@@ -300,7 +329,14 @@ class MainActivity : Activity() {
             setOnClickListener { newSection(null) }
         }, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(3), dp(10), dp(3), 0) })
 
+        col.addView(sectionTitle("⚡ Rutinlerim", "basılı tut: düzenle"))
+        routinesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(routinesBox)
+        refreshRoutines()
+
         wakeChip = tile("👂", "Uyandırma") { toggleWake() }
+        voiceReplyTile = tile("🔊", "Sesli cevap") { toggleVoiceReply() }
+        updateVoiceReplyTile()
         col.addView(sectionTitle("🛠 D-FON", null))
         col.addView(grid(listOf(
             tile("❓", "Yardım") { submit("Yardım", true) },
@@ -308,6 +344,8 @@ class MainActivity : Activity() {
             wakeChip,
             tile("✅", "İzinli uygulamalar") { showAppPicker() },
             tile("🔐", "İzinler") { showPermissions() },
+            tile("📝", "Notlarım") { submit("Notlarım", true) },
+            voiceReplyTile,
             tile("🧹", "Sohbeti temizle") { clearChat() },
         )))
         return ScrollView(this).apply { addView(col) }
@@ -879,6 +917,12 @@ class MainActivity : Activity() {
         }
         box.addView(offset)
 
+        val countdownBox = CheckBox(this).apply {
+            text = "Üst çubukta sıradaki vakte kalan süreyi göster"
+            isChecked = Prayer.countdownEnabled(this@MainActivity)
+        }
+        box.addView(countdownBox)
+
         box.addView(label("Konum (enlem, boylam) — istersen elle yaz"))
         val loc = EditText(this).apply {
             hint = "ör. 41.01, 28.97"
@@ -896,6 +940,7 @@ class MainActivity : Activity() {
                 if (chosen != null) Prayer.setDuration(this, chosen)
                 Prayer.setMode(this, if (vib.isChecked) "titresim" else "sessiz")
                 Prayer.setSabahOffset(this, offset.text.toString().toIntOrNull()?.coerceIn(0, 120) ?: 0)
+                Prayer.setCountdownEnabled(this, countdownBox.isChecked)
                 val parts = loc.text.toString().split(",", " ").mapNotNull { it.trim().toDoubleOrNull() }
                 if (parts.size == 2 && parts[0] in -66.0..66.0 && parts[1] in -180.0..180.0) {
                     Prayer.setLocation(this, parts[0], parts[1])
@@ -1036,19 +1081,23 @@ class MainActivity : Activity() {
 
     // ---------------- Komut çalıştırma ----------------
 
-    private fun submit(raw: String, fromTile: Boolean = false) {
+    private fun submit(raw: String, fromTile: Boolean = false, voice: Boolean = false) {
         val text = raw.trim()
         if (text.isEmpty() || busy) return
         if (!fromTile) showPanel(false)
         input.setText("")
         remember(text)
         addBubble(text, Who.USER)
-        runInBackground { engine.handle(text) }
+        fromVoice = voice
+        runInBackground({ engine.handle(text) })
     }
 
     /** Dosya dönüştürme gibi uzun işler arayüzü dondurmasın diye arka planda çalışır. */
-    private fun runInBackground(work: () -> List<String>) {
+    private fun runInBackground(work: () -> List<String>, after: (() -> Unit)? = null) {
         setBusy(true)
+        val started = System.currentTimeMillis()
+        val speakIt = fromVoice && voiceReplyOn()
+        fromVoice = false
         Thread {
             val replies = try {
                 work()
@@ -1061,8 +1110,143 @@ class MainActivity : Activity() {
                 setBusy(false)
                 refreshPermButton()
                 refreshPrayerCard()
+                // Sesli cevap: komut sesle verildiyse ve o sırada bir okuma başlamadıysa
+                if (speakIt && replies.isNotEmpty() && Speaker.lastStart < started) {
+                    Speaker.speak(this, speakable(replies.joinToString(". ")))
+                }
+                after?.invoke()
             }
         }.start()
+    }
+
+    /** Emojileri ve sembolleri atıp okunabilir hale getirir; çok uzunsa kısaltır. */
+    private fun speakable(t: String): String {
+        val clean = t.replace(Regex("[\\p{So}\\p{Sk}\\uFE0F\\u200D•▶→]"), " ")
+            .replace(Regex("[ \\t]+"), " ").trim()
+        return if (clean.length > 600) clean.take(600).substringBeforeLast(' ') + ". Devamı ekranda." else clean
+    }
+
+    private fun voiceReplyOn() = getSharedPreferences("dfon", MODE_PRIVATE).getBoolean("sesli_cevap", true)
+
+    private fun toggleVoiceReply() {
+        val on = !voiceReplyOn()
+        getSharedPreferences("dfon", MODE_PRIVATE).edit().putBoolean("sesli_cevap", on).apply()
+        updateVoiceReplyTile()
+        showResult(if (on) "🔊 Sesle verdiğin komutların cevabını sesli söyleyeceğim." else "🔇 Cevapları artık sadece yazıyla göstereceğim.")
+    }
+
+    private fun updateVoiceReplyTile() {
+        if (!::voiceReplyTile.isInitialized) return
+        val on = voiceReplyOn()
+        setTileText(voiceReplyTile, if (on) "🔊" else "🔇", if (on) "Sesli cevap açık" else "Sesli cevap kapalı")
+        voiceReplyTile.background = rounded(if (on) WAKE_ON else CHIP, 14)
+    }
+
+    // ---------------- Rutinler ----------------
+
+    private fun refreshRoutines() {
+        routinesBox.removeAllViews()
+        val list = Routines.all(this)
+        val tiles: List<View> = list.mapIndexed { i, r ->
+            tile("⚡", r.name + (r.time?.let { "\n⏰ $it" } ?: "")) { submit(r.name, true) }.apply {
+                setOnLongClickListener { routineMenu(i); true }
+            }
+        } + tile("➕", "Rutin ekle") { editRoutine(-1) }
+        routinesBox.addView(grid(tiles))
+    }
+
+    private fun routineMenu(i: Int) {
+        val list = Routines.all(this)
+        val r = list.getOrNull(i) ?: return
+        AlertDialog.Builder(this)
+            .setTitle(r.name)
+            .setItems(arrayOf("✏ Düzenle", "▶ Şimdi çalıştır", "🗑 Sil")) { _, w ->
+                when (w) {
+                    0 -> editRoutine(i)
+                    1 -> submit(r.name, true)
+                    else -> {
+                        Routines.save(this, list.filterIndexed { k, _ -> k != i })
+                        refreshRoutines()
+                    }
+                }
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
+    private fun editRoutine(i: Int) {
+        val list = Routines.all(this).toMutableList()
+        val old = list.getOrNull(i)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        fun label(t: String) = TextView(this).apply {
+            text = t
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        box.addView(label("Adı (bunu söyleyince çalışır)"))
+        val name = EditText(this).apply {
+            hint = "ör. Uyku modu"
+            setText(old?.name ?: "")
+        }
+        box.addView(name)
+        box.addView(label("Komutlar (her satıra bir komut)"))
+        val cmds = EditText(this).apply {
+            hint = "Titreşime al\nParlaklık 10\nRahatsız etmeyi aç"
+            minLines = 4
+            gravity = Gravity.TOP
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setText(old?.commands?.joinToString("\n") ?: "")
+        }
+        box.addView(cmds)
+        val pick = TextView(this).apply {
+            text = "➕ Hazır komutlardan ekle"
+            setTextColor(ACCENT)
+            setPadding(0, dp(6), 0, dp(6))
+            setOnClickListener {
+                val all = SECTIONS.flatMap { it.second }
+                AlertDialog.Builder(this@MainActivity)
+                    .setItems(all.map { "${it.first}  ${it.third}" }.toTypedArray()) { _, w ->
+                        val cur = cmds.text.toString().trimEnd()
+                        cmds.setText(if (cur.isEmpty()) all[w].third else cur + "\n" + all[w].third)
+                    }
+                    .show()
+            }
+        }
+        box.addView(pick)
+        box.addView(label("Her gün şu saatte kendiliğinden çalışsın (boş bırakabilirsin)"))
+        val time = EditText(this).apply {
+            hint = "ör. 23:00"
+            inputType = InputType.TYPE_CLASS_DATETIME or InputType.TYPE_DATETIME_VARIATION_TIME
+            setText(old?.time ?: "")
+        }
+        box.addView(time)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (old == null) "Yeni rutin" else "Rutini düzenle")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Kaydet") { _, _ ->
+                val n = name.text.toString().trim()
+                val c = cmds.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }
+                if (n.isEmpty() || c.isEmpty()) {
+                    showResult("Rutin için ad ve en az bir komut gerekli.")
+                    return@setPositiveButton
+                }
+                val tText = time.text.toString().trim()
+                val t = if (tText.isEmpty()) null else Routines.parseTime(tText)
+                if (tText.isNotEmpty() && t == null) showResult("Saat anlaşılmadı (ör. 23:00); saatsiz kaydettim.")
+                val r = Routine(n, c, t)
+                if (old == null) list.add(r) else list[i] = r
+                Routines.save(this, list)
+                refreshRoutines()
+                if (t != null) showResult("⚡ $n her gün $t'de kendiliğinden çalışacak.\n" + c.joinToString(" → "))
+                else showResult("⚡ $n kaydedildi. \"$n\" demen ya da düğmesine basman yeterli.")
+            }
+            .setNegativeButton("Vazgeç", null)
+            .show()
     }
 
     private fun clearChat() {
@@ -1188,7 +1372,7 @@ class MainActivity : Activity() {
             if (!said.isNullOrBlank()) {
                 // "Bir iki üç fon, ..." diye başlandıysa uyandırma sözünü at
                 val cmd = Voice.wakeCommand(said) ?: said
-                if (cmd.isBlank()) startVoice() else submit(cmd)
+                if (cmd.isBlank()) startVoice() else submit(cmd, voice = true)
             }
         }
         override fun onError(error: Int) {
@@ -1210,7 +1394,7 @@ class MainActivity : Activity() {
         i.removeExtra(WakeService.EXTRA_WAKE)
         val cmd = i.getStringExtra(WakeService.EXTRA_COMMAND).orEmpty().trim()
         WakeService.followUntil = System.currentTimeMillis() + WakeService.FOLLOW_MS
-        if (cmd.isNotEmpty()) submit(cmd) else micBtn.postDelayed({ startVoice() }, 400)
+        if (cmd.isNotEmpty()) submit(cmd, voice = true) else micBtn.postDelayed({ startVoice() }, 400)
     }
 
     private fun updateWakeChip() {
@@ -1281,6 +1465,11 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == ContactTools.REQ_CONTACTS) {
+            val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            showResult(if (ok) "📇 Teşekkürler. Şimdi komutu tekrar söyle (ör. \"annemi ara\")." else "Rehber izni verilmedi.")
+            return
+        }
         if (requestCode == REQ_LOC) {
             val wasPending = pendingLocate
             pendingLocate = false
@@ -1324,11 +1513,11 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_VOICE && resultCode == RESULT_OK) {
             val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (!said.isNullOrBlank()) submit(said)
+            if (!said.isNullOrBlank()) submit(said, voice = true)
         }
         if (requestCode == FileTools.REQ_PICK) {
             val picked = if (resultCode == RESULT_OK) files.handlePick(data) else emptyList()
-            runInBackground { engine.onFilesPicked(picked) }
+            runInBackground({ engine.onFilesPicked(picked) })
         }
     }
 
@@ -1471,6 +1660,7 @@ class MainActivity : Activity() {
         private const val REQ_MIC = 42
         private const val REQ_NOTIF = 43
         private const val REQ_LOC = 44
+        const val EXTRA_TILE_WAKE = "kutucuk_dinleme"
         private val WAKE_ON = 0xFF1E8E5A.toInt()
         private val WAKE_OFF = 0xFF3A4458.toInt()
         private val APP_BG = 0xFF2C3E5C.toInt()
