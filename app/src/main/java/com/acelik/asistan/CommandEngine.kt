@@ -649,6 +649,7 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)
 📄 Dosyalar: "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir", "dosyayı aç", "dosyayı WhatsApp'tan gönder"
 ✍ "PDF yap: metnin…" / "Word yap: metnin…"
+🖐 Sesle başka uygulamayı kullan ("👂 Uyandırma" ve "D-FON Uygulama Kilidi ve Sesli Kontrol" açıkken): "Bir iki üç fon, YouTube'u aç" → sonra 25 sn boyunca sözü tekrar etmeden: "aşağı kaydır", "yukarı kaydır", "Abonelikler'e dokun", "neler var", "ekranı oku", "yaz: ninni", "geri", "ana ekran", "tamam" (dinlemeyi bitirir).
 🎤 Ortadaki büyük mikrofona dokunup söyle. "👂 Uyandırma"yı açarsan ekran açıkken "Bir iki üç fon" demen yeter; arkasından komutu da söyleyebilirsin: "Bir iki üç fon, feneri aç".
 🔊 Okuma: "PDF'i oku", "Word'ü oku", "dosyayı oku", "oku: metin…", "ekrandaki yazıyı oku", "dur" (susar). Başka bir uygulamada yazı seçip menüden "D-FON ile oku" da diyebilirsin.
 🌐 İnternet (tarayıcıda açılır): "hava durumu ara", "YouTube'da Kuran tilaveti izle", "Vikipedi'de Osmanlı ara", "trt.net.tr"

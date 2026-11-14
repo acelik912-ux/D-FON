@@ -61,11 +61,12 @@ object Voice {
         for (i in n.indices) {
             if (n[i] !in FON_WORDS && !n[i].endsWith("fon")) continue
             // "fon"dan önceki kısım: "bir iki üç" / "1 2 3" / "123" / "birikiüç"
-            val before = n.subList(maxOf(0, i - 3), i).joinToString("") +
+            val before = n.subList(maxOf(0, i - 4), i).joinToString("") +
                 (if (n[i].endsWith("fon") && n[i] != "fon") n[i].removeSuffix("fon") else "")
             val digits = before
-                .replace("bir", "1").replace("iki", "2").replace("uc", "3")
-            if (digits.endsWith("123")) {
+                .replace("bir", "1").replace("iki", "2").replace("uc", "3").replace("dort", "4")
+            // "bir iki üç fon" ya da "bir iki üç dört fon"
+            if (digits.endsWith("123") || digits.endsWith("1234")) {
                 return words.drop(i + 1).joinToString(" ").trim()
             }
         }

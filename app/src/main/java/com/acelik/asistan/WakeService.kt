@@ -136,11 +136,57 @@ class WakeService : Service(), RecognitionListener {
         val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION) ?: emptyList<String>()
         for (said in list) {
             val cmd = Voice.wakeCommand(said) ?: continue
-            wake(cmd)
+            handleCommand(cmd)
             return
+        }
+        // Az önce bir komut verildiyse bir süre uyandırma sözü olmadan da dinle
+        if (System.currentTimeMillis() < followUntil) {
+            for (said in list) {
+                val t = FileTools.norm(said)
+                if (t in END_WORDS) {
+                    followUntil = 0
+                    android.widget.Toast.makeText(this, "Tamam, beklemedeyim.", android.widget.Toast.LENGTH_SHORT).show()
+                    schedule(300)
+                    return
+                }
+                if (tryHere(said, false)) {
+                    followUntil = System.currentTimeMillis() + FOLLOW_MS
+                    schedule(400)
+                    return
+                }
+            }
+            // Ekranda yapılamayan ama D-FON'un anlayacağı bir komutsa ("feneri kapat") D-FON'a ilet
+            val first = list.firstOrNull().orEmpty()
+            val tk = FileTools.norm(first).split(" ")
+            if (tk.any { w -> FOLLOW_VERBS.any { w.startsWith(it) } }) {
+                val tapLike = tk.any { w -> listOf("dokun", "bas", "tikla", "gir").any { w.startsWith(it) } }
+                if (tapLike) {
+                    tryHere(first, true) // bulunamazsa kısa bir uyarı gösterir
+                    schedule(400)
+                    return
+                }
+                wake(first)
+                return
+            }
         }
         schedule(150)
     }
+
+    private fun handleCommand(cmd: String) {
+        followUntil = System.currentTimeMillis() + FOLLOW_MS
+        if (cmd.isNotBlank() && tryHere(cmd, false)) {
+            schedule(400)
+            return
+        }
+        wake(cmd)
+    }
+
+    /** Ekranda yapılabilecek komutları D-FON'u öne getirmeden yapar. */
+    private fun tryHere(cmd: String, reportMissing: Boolean): Boolean =
+        ScreenControl.openApp(this, cmd, false) ||
+            ScreenControl.handle(this, cmd, false) ||
+            ScreenControl.openApp(this, cmd, true) ||
+            (reportMissing && ScreenControl.handle(this, cmd, true))
 
     override fun onError(error: Int) {
         listening = false
@@ -232,6 +278,13 @@ class WakeService : Service(), RecognitionListener {
         /** D-FON ekranı şu an açık mı (açıksa uyandırma dinlemesi bekler). */
         @Volatile
         var appVisible = false
+
+        /** Bu zamana kadar "bir iki üç fon" demeden de komut dinlenir. */
+        @Volatile
+        var followUntil = 0L
+        const val FOLLOW_MS = 25_000L
+        private val FOLLOW_VERBS = listOf("dokun", "bas", "tikla", "gir", "kapat", "artir", "azalt", "yap", "kur", "cevir", "ara")
+        private val END_WORDS = setOf("tamam", "bitti", "tesekkurler", "tesekkur ederim", "sagol", "kapat dinlemeyi")
 
         fun isEnabled(c: Context) =
             c.getSharedPreferences("dfon", Context.MODE_PRIVATE).getBoolean("uyandirma", false)

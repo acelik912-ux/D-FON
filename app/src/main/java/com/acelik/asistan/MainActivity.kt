@@ -1197,6 +1197,7 @@ class MainActivity : Activity() {
         if (i == null || !i.getBooleanExtra(WakeService.EXTRA_WAKE, false)) return
         i.removeExtra(WakeService.EXTRA_WAKE)
         val cmd = i.getStringExtra(WakeService.EXTRA_COMMAND).orEmpty().trim()
+        WakeService.followUntil = System.currentTimeMillis() + WakeService.FOLLOW_MS
         if (cmd.isNotEmpty()) submit(cmd) else micBtn.postDelayed({ startVoice() }, 400)
     }
 
