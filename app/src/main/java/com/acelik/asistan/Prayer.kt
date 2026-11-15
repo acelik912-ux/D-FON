@@ -174,12 +174,13 @@ object Prayer {
                 enableVibration(false)
             }
         )
-        val label = if (mins < 100) "$mins" else "${mins / 60}s"
+        // Üst satır sayı, alt satır birim: "47 / dk" ya da "2:15 / saat"
+        val (top, unit) = if (mins < 60) "$mins" to "dk" else "${mins / 60}:${"%02d".format(mins % 60)}" to "saat"
         val t = timesFor(c, 0)
         val all = if (t == null) "" else PrayerTimes.NAMES.indices.joinToString("  ·  ") { "${PrayerTimes.NAMES[it]} ${fmt(t[it])}" }
         val open = PendingIntent.getActivity(c, 4, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(c, CHANNEL_CD)
-            .setSmallIcon(Icon.createWithBitmap(numberBitmap(label)))
+            .setSmallIcon(Icon.createWithBitmap(numberBitmap(top, unit)))
             .setContentTitle("${next.first} vaktine ${durationText(mins)} kaldı (${fmt(next.second)})")
             .setContentText(all)
             .setStyle(Notification.BigTextStyle().bigText(all.replace("  ·  ", "\n")))
@@ -194,7 +195,6 @@ object Prayer {
         // Sayı değişeceği an tekrar güncelle. RTC (uyandırmayan) alarm: telefon uykudayken pil harcamaz.
         val at = when {
             mins == 0 -> next.second + 1000
-            mins >= 100 -> minOf(now + 5 * 60_000L, next.second - 99 * 60_000L)
             else -> next.second - (mins - 1) * 60_000L
         }.coerceAtLeast(now + 1000)
         val exactOk = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
@@ -202,19 +202,28 @@ object Prayer {
     }
 
     /** Durum çubuğunda görünecek, içinde sayı yazan küçük simge. */
-    private fun numberBitmap(text: String): Bitmap {
+    private fun numberBitmap(text: String, unit: String): Bitmap {
         val size = 96
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val cv = Canvas(bmp)
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val big = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             textAlign = Paint.Align.CENTER
-            textSize = if (text.length <= 2) 78f else 60f
+            textSize = 64f
         }
-        while (p.measureText(text) > size - 4 && p.textSize > 20f) p.textSize -= 2f
-        val y = size / 2f - (p.descent() + p.ascent()) / 2f
-        cv.drawText(text, size / 2f, y, p)
+        while (big.measureText(text) > size - 2 && big.textSize > 20f) big.textSize -= 2f
+        val small = Paint(big).apply { textSize = 34f }
+        while (small.measureText(unit) > size - 2 && small.textSize > 14f) small.textSize -= 2f
+        // iki satırı dikeyde ortala
+        val bigH = big.descent() - big.ascent()
+        val smallH = small.descent() - small.ascent()
+        val gap = -6f
+        val total = bigH + gap + smallH
+        var y = (size - total) / 2f - big.ascent()
+        cv.drawText(text, size / 2f, y, big)
+        y += big.descent() + gap - small.ascent()
+        cv.drawText(unit, size / 2f, y, small)
         return bmp
     }
 
