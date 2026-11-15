@@ -273,16 +273,17 @@ object Prayer {
         }
 
         if (unit.isEmpty()) {
-            val p = paint(0.74f)
-            val b = fit(p, text, size - 2, size - 4)
+            // "3:53": yatayda daha çok sıkıştırıp boyu uzatıyoruz, kare yüksekliğini neredeyse dolduruyor
+            val p = paint(0.58f)
+            val b = fit(p, text, size, size - 2)
             // sınırlara göre tam ortala
             cv.drawText(text, (size - b.width()) / 2f - b.left, (size - b.height()) / 2f - b.top, p)
             return bmp
         }
-        val gap = 5
-        val big = paint(0.86f)
-        val small = paint(1f)
-        val ub = fit(small, unit, size - 8, 22)
+        val gap = 3
+        val big = paint(0.8f)
+        val small = paint(0.9f)
+        val ub = fit(small, unit, size - 8, 15)
         val nb = fit(big, text, size, size - ub.height() - gap - 2)
         val total = nb.height() + gap + ub.height()
         val top = (size - total) / 2f
