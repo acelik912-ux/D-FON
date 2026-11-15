@@ -174,8 +174,8 @@ object Prayer {
                 enableVibration(false)
             }
         )
-        // Üst satır sayı, alt satır birim: "47 / dk" ya da "2:15 / saat"
-        val (top, unit) = if (mins < 60) "$mins" to "dk" else "${mins / 60}:${"%02d".format(mins % 60)}" to "saat"
+        // 1 saatten az: "47" altında "dk"; fazlası sadece "2:15"
+        val (top, unit) = if (mins < 60) "$mins" to "dk" else "${mins / 60}:${"%02d".format(mins % 60)}" to ""
         val t = timesFor(c, 0)
         val all = if (t == null) "" else PrayerTimes.NAMES.indices.joinToString("  ·  ") { "${PrayerTimes.NAMES[it]} ${fmt(t[it])}" }
         val open = PendingIntent.getActivity(c, 4, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
@@ -212,7 +212,12 @@ object Prayer {
             textAlign = Paint.Align.CENTER
             textSize = 64f
         }
+        if (unit.isEmpty()) big.textSize = 80f
         while (big.measureText(text) > size - 2 && big.textSize > 20f) big.textSize -= 2f
+        if (unit.isEmpty()) {
+            cv.drawText(text, size / 2f, size / 2f - (big.descent() + big.ascent()) / 2f, big)
+            return bmp
+        }
         val small = Paint(big).apply { textSize = 34f }
         while (small.measureText(unit) > size - 2 && small.textSize > 14f) small.textSize -= 2f
         // iki satırı dikeyde ortala
