@@ -101,13 +101,14 @@ object LedStyle {
     private val iconCache = LruCache<String, Bitmap>(160)
 
     /** Uygulama simgesi: yumuşak köşeli kare, koyu zemin, altın çizgi, alttan yanlara yayılan LED, ortada simge. */
-    fun icon(c: Context, pkg: String, sizePx: Int): Bitmap? {
-        val key = "$pkg@$sizePx@${ledName(c)}"
-        iconCache.get(key)?.let { return it }
+    fun icon(c: Context, pkg: String, sizePx: Int, export: Boolean = false): Bitmap? {
+        val key = "$pkg@$sizePx@${ledName(c)}@$export"
+        if (!export) iconCache.get(key)?.let { return it }
         val d = try { c.packageManager.getApplicationIcon(pkg) } catch (e: Exception) { return null }
         val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val cv = Canvas(bmp)
-        val dp = c.resources.displayMetrics.density
+        // Dışa aktarılan büyük resimde çizgi kalınlıkları simge boyuna göre (62 dp'lik simge oranında)
+        val dp = if (export) sizePx / 62f else c.resources.displayMetrics.density
         val s = sizePx.toFloat()
         val led = ledColor(c)
         // alt tarafta yansıma için biraz boşluk bırak
@@ -125,7 +126,7 @@ object LedStyle {
         val inset = s * 0.2f
         d.setBounds(inset.toInt(), (shape.top + inset - 2f * dp).toInt(), (s - inset).toInt(), (shape.bottom - inset + 2f * dp).toInt())
         d.draw(cv)
-        iconCache.put(key, bmp)
+        if (!export) iconCache.put(key, bmp)
         return bmp
     }
 

@@ -351,6 +351,7 @@ class MainActivity : Activity() {
             tile("📝", "Notlarım") { submit("Notlarım", true) },
             tile("🎨", "Widget teması") { showWidgetStyle() },
             tile("🖼", "Telefon teması") { PhoneThemes.show(this) { refreshSections() } },
+            tile("🧩", "Temalı simgeleri kaydet") { exportIcons() },
             tile("🏠", "D-FON ana ekran") { homeSetup() },
             voiceReplyTile,
             tile("🧹", "Sohbeti temizle") { clearChat() },
@@ -825,6 +826,63 @@ class MainActivity : Activity() {
         })
         refreshPrayerCard()
         return card
+    }
+
+    /**
+     * Samsung ana ekranı için: seçilen uygulamaların simgelerini temalı çerçeveyle PNG olarak galeriye kaydeder.
+     * Theme Park'ta her uygulamanın simgesi bu resimlerle değiştirilir.
+     */
+    private fun exportIcons() {
+        val apps = files.installedApps()
+        val pre = files.allowedPackages() + layout.flatMap { s -> s.items.mapNotNull { it.pkg } }
+        val checked = BooleanArray(apps.size) { apps[it].pkg in pre }
+        AlertDialog.Builder(this)
+            .setTitle("Hangi uygulamaların simgesi?")
+            .setMultiChoiceItems(apps.map { it.label }.toTypedArray(), checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Kaydet") { _, _ ->
+                val chosen = apps.filterIndexed { i, _ -> checked[i] }
+                if (chosen.isEmpty()) return@setPositiveButton
+                showResult("🧩 ${chosen.size} simge hazırlanıyor…")
+                Thread {
+                    var n = 0
+                    for (a in chosen) {
+                        val bmp = LedStyle.icon(this, a.pkg, 432, export = true) ?: continue
+                        val name = a.label.replace(Regex("[\\\\/:*?\"<>|]"), "_") + ".png"
+                        val cv = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/D-FON Simgeler")
+                        }
+                        val uri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: continue
+                        try {
+                            contentResolver.openOutputStream(uri)?.use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            n++
+                        } catch (e: Exception) {
+                            contentResolver.delete(uri, null, null)
+                        }
+                        bmp.recycle()
+                    }
+                    runOnUiThread {
+                        showResult(
+                            "🧩 $n simge galeriye kaydedildi (Resimler/D-FON Simgeler).\n\n" +
+                                "Samsung ana ekranında kullanmak için Theme Park:\n" +
+                                "1. Theme Park → Simge → bir simge paketi oluştur ya da düzenle.\n" +
+                                "2. Değiştirmek istediğin uygulamaya dokun → Galeri'den resim seç.\n" +
+                                "3. D-FON Simgeler klasöründen o uygulamanın resmini seç ve kaydet; sonra paketi uygula."
+                        )
+                    }
+                }.start()
+            }
+            .setNeutralButton("Hepsini seç", null)
+            .setNegativeButton("Vazgeç", null)
+            .create().also { dlg ->
+                dlg.setOnShowListener {
+                    dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                        for (i in checked.indices) { checked[i] = true; dlg.listView.setItemChecked(i, true) }
+                    }
+                }
+                dlg.show()
+            }
     }
 
     /** D-FON'u telefonun ana ekranı yapma: simgeler ve widget'lar temalı çerçeveyle görünür. */
