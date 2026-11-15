@@ -60,13 +60,54 @@ object Prayer {
     fun hasLocation(c: Context) = prefs(c).contains("lat")
     fun lat(c: Context) = prefs(c).getFloat("lat", 0f).toDouble()
     fun lon(c: Context) = prefs(c).getFloat("lon", 0f).toDouble()
-    fun setLocation(c: Context, lat: Double, lon: Double) {
-        prefs(c).edit().putFloat("lat", lat.toFloat()).putFloat("lon", lon.toFloat()).apply()
+    /** name: listeden seçilen il (GPS'ten gelirse null) */
+    fun setLocation(c: Context, lat: Double, lon: Double, name: String? = null) {
+        val e = prefs(c).edit().putFloat("lat", lat.toFloat()).putFloat("lon", lon.toFloat())
+        if (name != null) e.putString("konum_adi", name) else e.remove("konum_adi")
+        e.apply()
         schedule(c)
         refreshExtras(c)
     }
-    fun locationText(c: Context) =
-        if (!hasLocation(c)) "Konum yok" else "%.3f, %.3f".format(Locale.US, lat(c), lon(c))
+    fun placeName(c: Context): String? = prefs(c).getString("konum_adi", null)
+    fun locationText(c: Context) = when {
+        !hasLocation(c) -> "Konum yok"
+        placeName(c) != null -> "${placeName(c)} (il merkezi)"
+        else -> "%.3f, %.3f".format(Locale.US, lat(c), lon(c))
+    }
+
+    // ---------------- son olay ve pil kısıtlaması ----------------
+
+    /** Ne olduğunu kullanıcıya göstermek için son ezan olayını saklar. */
+    private fun log(c: Context, text: String) {
+        prefs(c).edit().putString("son_olay", text).apply()
+    }
+    fun lastEvent(c: Context): String? = prefs(c).getString("son_olay", null)
+
+    /** Samsung/Android pil tasarrufu uygulamayı uyutursa ezan alarmı gecikebilir. */
+    fun batteryRestricted(c: Context): Boolean {
+        val pm = c.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return !pm.isIgnoringBatteryOptimizations(c.packageName)
+    }
+
+    /**
+     * Alarm gecikti ya da hiç gelmediyse: şu an bir vaktin sessiz kalma süresi içindeysek
+     * ve o vakit işlenmediyse, kalan süre kadar sessize al.
+     */
+    fun checkMissed(c: Context) {
+        if (!isEnabled(c) || !hasLocation(c)) return
+        val p = prefs(c)
+        val now = System.currentTimeMillis()
+        val durMs = duration(c) * 60_000L
+        for ((name, t) in ezans(c, 0) + ezans(c, -1)) {
+            if (t <= now && now < t + durMs - 60_000L && p.getLong("son_ezan", 0L) != t) {
+                p.edit().putLong("son_ezan", t).apply()
+                val left = Math.ceil((t + durMs - now) / 60_000.0).toInt()
+                val r = silenceNow(c, name, left)
+                log(c, "$name ${fmt(t)}: zamanında yakalanamadı, ${fmt(now)}'de yapıldı. $r")
+                return
+            }
+        }
+    }
 
     fun duration(c: Context) = prefs(c).getInt("sure", 30)
     fun setDuration(c: Context, min: Int) = prefs(c).edit().putInt("sure", min).apply()
@@ -234,9 +275,10 @@ object Prayer {
 
     // ---------------- zamanlama ----------------
 
-    private fun pi(c: Context, action: String, code: Int, name: String? = null): PendingIntent {
+    private fun pi(c: Context, action: String, code: Int, name: String? = null, at: Long = 0L): PendingIntent {
         val i = Intent(c, PrayerReceiver::class.java).setAction(action)
         if (name != null) i.putExtra("ad", name)
+        if (at > 0) i.putExtra("zaman", at)
         return PendingIntent.getBroadcast(
             c, code, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -259,7 +301,7 @@ object Prayer {
         cancelSilenceAlarm(c)
         if (!isEnabled(c)) return
         val next = nextEzan(c) ?: return
-        setAlarm(c, next.second, pi(c, ACTION_SILENCE, 1, next.first))
+        setAlarm(c, next.second, pi(c, ACTION_SILENCE, 1, next.first, next.second))
     }
 
     // ---------------- sessize alma / geri alma ----------------
@@ -318,6 +360,7 @@ object Prayer {
             val at = p.getLong("geri_al", 0)
             if (at <= System.currentTimeMillis()) restore(c) else setAlarm(c, at, pi(c, ACTION_RESTORE, 2))
         }
+        checkMissed(c)
         schedule(c)
     }
 
@@ -345,20 +388,30 @@ object Prayer {
     internal fun onReceive(c: Context, i: Intent) {
         when (i.action) {
             ACTION_SILENCE -> {
-                if (isEnabled(c)) silenceNow(c, i.getStringExtra("ad") ?: "Namaz")
-                // Alarm biraz erken geldiyse aynı vakti tekrar kurmasın
                 val now = System.currentTimeMillis()
+                val name = i.getStringExtra("ad") ?: "Namaz"
+                val at = i.getLongExtra("zaman", now)
+                if (isEnabled(c) && prefs(c).getLong("son_ezan", 0L) != at) {
+                    prefs(c).edit().putLong("son_ezan", at).apply()
+                    val late = (now - at) / 60_000L
+                    val r = silenceNow(c, name)
+                    log(c, "$name ${fmt(at)}: " + (if (late >= 2) "alarm $late dk gecikti. " else "") + r)
+                }
+                // Alarm biraz erken geldiyse aynı vakti tekrar kurmasın
                 cancelSilenceAlarm(c)
                 if (isEnabled(c)) {
                     val next = (0..2).asSequence().flatMap { ezans(c, it).asSequence() }
                         .firstOrNull { it.second > now + 60_000L }
-                    if (next != null) setAlarm(c, next.second, pi(c, ACTION_SILENCE, 1, next.first))
+                    if (next != null) setAlarm(c, next.second, pi(c, ACTION_SILENCE, 1, next.first, next.second))
                 }
             }
             ACTION_RESTORE -> {
                 restore(c)
             }
-            ACTION_TICK -> updateCountdown(c)
+            ACTION_TICK -> {
+                checkMissed(c)
+                updateCountdown(c)
+            }
             else -> { // açılış, saat/dilim değişimi, güncelleme
                 recover(c)
                 refreshExtras(c)

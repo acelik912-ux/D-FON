@@ -76,6 +76,8 @@ class MainActivity : Activity() {
     private lateinit var prayerInfo: TextView
     private lateinit var prayerRow: LinearLayout
     private lateinit var prayerToggle: TextView
+    private lateinit var prayerEvent: TextView
+    private lateinit var prayerWarn: TextView
     private var pendingLocate = false
 
     private lateinit var micBtn: TextView
@@ -775,6 +777,21 @@ class MainActivity : Activity() {
         card.addView(prayerInfo)
         prayerRow = LinearLayout(this)
         card.addView(prayerRow, LinearLayout.LayoutParams(-1, -2))
+        prayerEvent = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFFB8D8C8.toInt())
+            setPadding(dp(2), dp(6), dp(2), 0)
+        }
+        card.addView(prayerEvent)
+        prayerWarn = TextView(this).apply {
+            textSize = 12.5f
+            setTextColor(Color.BLACK)
+            background = rounded(0xFFFFB4A2.toInt(), 10)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            text = "⚠ Pil tasarrufu D-FON'u uyutabilir; ezan vakti kaçabilir. Düzeltmek için dokun."
+            setOnClickListener { fixBattery() }
+        }
+        card.addView(prayerWarn, LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(6), 0, 0) })
 
         val buttons = LinearLayout(this).apply { setPadding(0, dp(8), 0, 0) }
         prayerToggle = TextView(this).apply {
@@ -918,6 +935,10 @@ class MainActivity : Activity() {
         }
         prayerToggle.text = if (on) "🔕 Ezanda sessiz: AÇIK (${Prayer.duration(this)} dk)" else "🔔 Ezanda sessiz: KAPALI"
         prayerToggle.background = rounded(if (on) ACCENT else 0xFF9FB3AA.toInt(), 12)
+        val ev = Prayer.lastEvent(this)
+        prayerEvent.text = if (ev != null) "Son olay: $ev" else ""
+        prayerEvent.visibility = if (ev != null) View.VISIBLE else View.GONE
+        prayerWarn.visibility = if (on && Prayer.batteryRestricted(this)) View.VISIBLE else View.GONE
     }
 
     private fun togglePrayer() {
@@ -933,6 +954,7 @@ class MainActivity : Activity() {
             return
         }
         Prayer.setEnabled(this, true)
+        if (Prayer.batteryRestricted(this)) fixBattery()
         refreshPrayerCard()
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -1023,8 +1045,19 @@ class MainActivity : Activity() {
             if (Prayer.hasLocation(this@MainActivity)) setText(Prayer.locationText(this@MainActivity))
         }
         box.addView(loc)
+        lateinit var settingsDialog: AlertDialog
+        box.addView(TextView(this).apply {
+            text = "📋 Listeden il seç (81 il)"
+            setTextColor(ACCENT)
+            textSize = 14f
+            setPadding(0, dp(8), 0, dp(8))
+            setOnClickListener {
+                settingsDialog.dismiss()
+                showCityPicker()
+            }
+        })
 
-        AlertDialog.Builder(this)
+        settingsDialog = AlertDialog.Builder(this)
             .setTitle("Ezanda sessize alma")
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Kaydet") { _, _ ->
@@ -1140,8 +1173,61 @@ class MainActivity : Activity() {
     }
 
     private fun locateFailed() {
+        showResult("Konum bulunamadı. Listeden ilini seçebilirsin; vakitler il merkezine göre hesaplanır.")
+        showCityPicker()
+    }
+
+    /** 81 il listesinden seçim (konum bulunamazsa). */
+    private fun showCityPicker() {
+        val all = Cities.ALL
+        var shown = all
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, all.map { "%02d · %s".format(it.plate, it.name) }.toMutableList())
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), 0)
+        }
+        val search = EditText(this).apply { hint = "İl adı ya da plaka (ör. Kocaeli, 41)" }
+        val list = ListView(this).apply { this.adapter = adapter }
+        box.addView(search)
+        box.addView(list, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55).toInt()))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("İlini seç")
+            .setView(box)
+            .setNegativeButton("Vazgeç", null)
+            .create()
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: Editable?) {
+                val q = FileTools.norm(e?.toString() ?: "")
+                shown = if (q.isEmpty()) all else all.filter { FileTools.norm(it.name).contains(q) || it.plate.toString() == q }
+                adapter.clear()
+                adapter.addAll(shown.map { "%02d · %s".format(it.plate, it.name) })
+            }
+        })
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val city = shown[pos]
+            Prayer.setLocation(this, city.lat, city.lon, city.name)
+            refreshPrayerCard()
+            showResult("📍 ${city.name} seçildi.\n\n" + Prayer.todayText(this))
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    /** Pil tasarrufu muafiyeti iste; Samsung'un "uyuyan uygulamalar" listesini de hatırlat. */
+    private fun fixBattery() {
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))
+            )
+        } catch (e: Exception) {
+            try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (ignored: Exception) {}
+        }
         showResult(
-            "Konum bulunamadı. Biraz açık bir yerde tekrar dene ya da ⚙ Ayarlar'dan enlem/boylamı elle yaz."
+            "Açılan pencerede \"İzin ver\"e bas.\n\nSamsung'da ayrıca: Ayarlar → Pil → Arka plan kullanım sınırları → " +
+                "\"Uyuyan uygulamalar\" ve \"Derin uyuyan uygulamalar\" listelerinde D-FON varsa çıkar; " +
+                "\"Hiç uyumayan uygulamalar\"a ekle. Bu ayarlar olmadan Samsung gece D-FON'u uyutup ezan alarmını geciktirebilir."
         )
     }
 
@@ -1570,7 +1656,8 @@ class MainActivity : Activity() {
             if (locGranted()) {
                 if (wasPending) locate()
             } else {
-                showResult("Konum izni verilmedi. ⚙ Ayarlar'dan enlem/boylamı elle de yazabilirsin.")
+                showResult("Konum izni verilmedi. Listeden ilini seçebilirsin.")
+                showCityPicker()
             }
             return
         }
