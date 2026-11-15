@@ -229,6 +229,7 @@ object Prayer {
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setCategory(Notification.CATEGORY_STATUS)
+            .setColor(0xFFE2B653.toInt()) // bildirim panelinde altın renk
             .setContentIntent(open)
             .build()
         try { nm.notify(NOTIF_CD, n) } catch (ignored: SecurityException) {}
@@ -243,33 +244,50 @@ object Prayer {
     }
 
     /** Durum çubuğunda görünecek, içinde sayı yazan küçük simge. */
+    /**
+     * Durum çubuğu simgesi: yazı karenin tamamını dolduracak kadar büyük çizilir.
+     * Dar (condensed) kalın yazı + yatay sıkıştırma ile rakamlar olabildiğince uzun olur.
+     */
     private fun numberBitmap(text: String, unit: String): Bitmap {
         val size = 96
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val cv = Canvas(bmp)
-        val big = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
-            textSize = 64f
+        val face = Typeface.create("sans-serif-condensed", Typeface.BOLD)
+        val r = android.graphics.Rect()
+
+        /** Yazıyı (w × h) kutusuna sığacak en büyük boyda ayarlar; gerçek çizim sınırlarını döner. */
+        fun fit(p: Paint, t: String, w: Int, h: Int): android.graphics.Rect {
+            var ts = 160f
+            while (ts > 10f) {
+                p.textSize = ts
+                p.getTextBounds(t, 0, t.length, r)
+                if (r.width() <= w && r.height() <= h) break
+                ts -= 1f
+            }
+            return android.graphics.Rect(r)
         }
-        if (unit.isEmpty()) big.textSize = 80f
-        while (big.measureText(text) > size - 2 && big.textSize > 20f) big.textSize -= 2f
+        fun paint(scaleX: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            typeface = face
+            textScaleX = scaleX
+        }
+
         if (unit.isEmpty()) {
-            cv.drawText(text, size / 2f, size / 2f - (big.descent() + big.ascent()) / 2f, big)
+            val p = paint(0.74f)
+            val b = fit(p, text, size - 2, size - 4)
+            // sınırlara göre tam ortala
+            cv.drawText(text, (size - b.width()) / 2f - b.left, (size - b.height()) / 2f - b.top, p)
             return bmp
         }
-        val small = Paint(big).apply { textSize = 34f }
-        while (small.measureText(unit) > size - 2 && small.textSize > 14f) small.textSize -= 2f
-        // iki satırı dikeyde ortala
-        val bigH = big.descent() - big.ascent()
-        val smallH = small.descent() - small.ascent()
-        val gap = -6f
-        val total = bigH + gap + smallH
-        var y = (size - total) / 2f - big.ascent()
-        cv.drawText(text, size / 2f, y, big)
-        y += big.descent() + gap - small.ascent()
-        cv.drawText(unit, size / 2f, y, small)
+        val gap = 5
+        val big = paint(0.86f)
+        val small = paint(1f)
+        val ub = fit(small, unit, size - 8, 22)
+        val nb = fit(big, text, size, size - ub.height() - gap - 2)
+        val total = nb.height() + gap + ub.height()
+        val top = (size - total) / 2f
+        cv.drawText(text, (size - nb.width()) / 2f - nb.left, top - nb.top, big)
+        cv.drawText(unit, (size - ub.width()) / 2f - ub.left, top + nb.height() + gap - ub.top, small)
         return bmp
     }
 
