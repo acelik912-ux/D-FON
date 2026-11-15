@@ -23,6 +23,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Telefon teması: duvar kağıdını ayarlamak -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <!-- Ezan alarmı gece gecikmesin diye pil tasarrufu muafiyeti istemek için -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- "Annemi ara", "Ahmet'e mesaj yaz" -->
@@ -30,6 +32,17 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <queries>
+        <!-- D-FON ana ekranı: alt çubuğa telefon, mesaj, kamera, tarayıcı -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
@@ -74,6 +87,25 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- D-FON ana ekranı (telefonun ana ekranı olarak seçilebilir) -->
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true"
+            android:label="D-FON Ana Ekran"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:clearTaskOnLaunch="true"
+            android:excludeFromRecents="true"
+            android:resumeWhilePausing="true"
+            android:theme="@style/HomeTheme"
+            android:windowSoftInputMode="adjustPan">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

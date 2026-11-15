@@ -350,6 +350,8 @@ class MainActivity : Activity() {
             tile("🔐", "İzinler") { showPermissions() },
             tile("📝", "Notlarım") { submit("Notlarım", true) },
             tile("🎨", "Widget teması") { showWidgetStyle() },
+            tile("🖼", "Telefon teması") { PhoneThemes.show(this) { refreshSections() } },
+            tile("🏠", "D-FON ana ekran") { homeSetup() },
             voiceReplyTile,
             tile("🧹", "Sohbeti temizle") { clearChat() },
         )))
@@ -377,7 +379,7 @@ class MainActivity : Activity() {
         textSize = 11.5f
         maxLines = 3
         setPadding(dp(3), dp(6), dp(3), dp(6))
-        background = rounded(CHIP, 14)
+        background = LedStyle.FrameDrawable(this@MainActivity, 14f, CHIP)
         setOnClickListener { onClick() }
     }
 
@@ -490,7 +492,7 @@ class MainActivity : Activity() {
         setTextColor(Color.WHITE)
         maxLines = 3
         ellipsize = TextUtils.TruncateAt.END
-        background = rounded(if (locked) LOCKED_BG else APP_BG, 14)
+        background = LedStyle.FrameDrawable(this@MainActivity, 14f, if (locked) LOCKED_BG else APP_BG)
         setPadding(dp(4), dp(6), dp(4), dp(6))
         setOnClickListener { showResult(files.openApp(app)) }
     }
@@ -760,7 +762,7 @@ class MainActivity : Activity() {
     private fun buildPrayerCard(): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(PRAYER_BG, 16)
+            background = LedStyle.FrameDrawable(this@MainActivity, 16f, PRAYER_BG)
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         card.addView(TextView(this).apply {
@@ -823,6 +825,28 @@ class MainActivity : Activity() {
         })
         refreshPrayerCard()
         return card
+    }
+
+    /** D-FON'u telefonun ana ekranı yapma: simgeler ve widget'lar temalı çerçeveyle görünür. */
+    private fun homeSetup() {
+        AlertDialog.Builder(this)
+            .setTitle("🏠 D-FON ana ekran")
+            .setMessage(
+                "D-FON'u telefonun ana ekranı yaparsan bütün uygulama simgeleri ve widget'lar altın çizgili, altında LED " +
+                    "parlayan çerçeveyle görünür.\n\n" +
+                    "1. Açılan ekranda \"Ana ekran uygulaması\"nı (Varsayılan uygulamalar → Ana ekran) \"D-FON Ana Ekran\" yap.\n" +
+                    "2. Ana ekranda boş bir yere basılı tut: widget ekle, tema seç, düzenle.\n" +
+                    "3. Alttaki \"⋯ Tümü\" tüm uygulamaları açar; bir simgeye basılı tutarak ana ekrana ya da alt çubuğa eklersin.\n\n" +
+                    "Eski Samsung ana ekranına dönmek istersen aynı yerden \"One UI Home\"u seçmen yeterli."
+            )
+            .setPositiveButton("Ana ekran ayarını aç") { _, _ ->
+                try { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) } catch (e: Exception) {
+                    try { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } catch (ignored: Exception) {}
+                }
+            }
+            .setNeutralButton("Önizle") { _, _ -> startActivity(Intent(this, HomeActivity::class.java)) }
+            .setNegativeButton("Kapat", null)
+            .show()
     }
 
     /** Widget teması ve yazı büyüklüğü seçimi, canlı önizlemeli. */

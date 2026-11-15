@@ -43,6 +43,8 @@ object WidgetArt {
         Theme("altin", "Altın Hat", 0xFFCBBF9F.toInt(), 0xFFE9C46A.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 36f, 26f),
         Theme("safak", "Şafak", 0xFFF1C9C0.toInt(), 0xFFFFD98A.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 24f, 48f),
         Theme("cini", "İznik Çini", 0xFFA9D3F0.toInt(), 0xFFFFD166.toInt(), R.drawable.widget_cell_on_turq, 0xFF3CC4C0.toInt(), 0xFF062A3A.toInt(), 30f, 48f),
+        Theme("led", "Altın + Turkuaz LED", 0xFF9FE7E2.toInt(), 0xFFFFD166.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 40f, 20f),
+        Theme("led_altin", "Altın LED", 0xFFE8D3A0.toInt(), 0xFFFFCF5A.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 40f, 20f),
     )
 
     private fun prefs(c: Context) = c.getSharedPreferences("dfon", Context.MODE_PRIVATE)
@@ -78,6 +80,8 @@ object WidgetArt {
         "altin" -> radial(w, h, 0.5f, 0.3f, 0.9f, intArrayOf(0xFF211E18.toInt(), 0xFF0D0C0A.toInt()), null)
         "safak" -> LinearGradient(0f, 0f, 0f, h, intArrayOf(0xFF2B1B4A.toInt(), 0xFF6B2F5C.toInt(), 0xFFB5583A.toInt()), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
         "cini" -> radial(w, h, 0.5f, 0f, 1.1f, intArrayOf(0xFF1A4C8C.toInt(), 0xFF0B2550.toInt()), null)
+        "led" -> radial(w, h, 0.5f, 0.1f, 1.0f, intArrayOf(0xFF0E2A33.toInt(), 0xFF050C11.toInt()), null)
+        "led_altin" -> radial(w, h, 0.5f, 0.1f, 1.0f, intArrayOf(0xFF241A08.toInt(), 0xFF070502.toInt()), null)
         else -> radial(w, h, 0.5f, 0f, 1.1f, intArrayOf(0xFF1F3C78.toInt(), 0xFF0F2148.toInt(), 0xFF0A1633.toInt()), floatArrayOf(0f, 0.55f, 1f))
     }
 
@@ -91,6 +95,36 @@ object WidgetArt {
         val h = bmp.height.toFloat()
         val u = minOf(w / 440f, h / 250f)
         val gold = goldPaint(w, h)
+
+        // LED temaları: koyu zemin, altın çizgi + altında LED, üstte LED dizisi
+        if (t.id.startsWith("led")) {
+            val full = RectF(0f, 0f, w, h)
+            c.drawRoundRect(full, 28 * u, 28 * u, Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = background(t, w, h) })
+            val ledC = if (t.id == "led_altin") LedStyle.ALTIN_LED else LedStyle.TURKUAZ
+            val dp = u * 1.2f
+            LedStyle.drawFrame(c, full, 28 * u, dp, ledC)
+            // LED ışık dizisi (sarkık)
+            val x0 = 34 * u
+            val x1 = w - 34 * u
+            val y0 = 14 * u
+            val sag = 18 * u
+            val n = 26
+            val glowP = Paint(Paint.ANTI_ALIAS_FLAG).apply { maskFilter = android.graphics.BlurMaskFilter(3.2f * u, android.graphics.BlurMaskFilter.Blur.NORMAL) }
+            val dotP = Paint(Paint.ANTI_ALIAS_FLAG)
+            c.drawPath(Path().apply { moveTo(x0, y0); quadTo(w / 2, y0 + 2 * sag, x1, y0) }, stroke(0xFF2A4A50.toInt(), 0.8f * u, 255))
+            for (i in 0..n) {
+                val tt = i / n.toFloat()
+                val x = x0 + (x1 - x0) * tt
+                val y = y0 + sag * 4 * tt * (1 - tt)
+                val col = if (i % 2 == 0) ledC else 0xFFFFE6A0.toInt()
+                glowP.color = col
+                c.drawCircle(x, y, 3.2f * u, glowP)
+                dotP.color = col
+                c.drawCircle(x, y, 1.7f * u, dotP)
+            }
+            crescent(c, w - 52 * u, 22 * u, 18 * u, 0xFFFFD166.toInt())
+            return bmp
+        }
 
         // çerçeve
         c.drawRoundRect(RectF(0f, 0f, w, h), 28 * u, 28 * u, gold)
