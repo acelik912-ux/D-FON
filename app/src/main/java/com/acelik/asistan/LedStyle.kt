@@ -45,26 +45,49 @@ object LedStyle {
         shader = LinearGradient(r.left, r.top, r.right, r.bottom, GOLDS, GOLD_STOPS, Shader.TileMode.CLAMP)
     }
 
-    /** Dışta altın çizgi, hemen içinde LED parıltısı. dp: 1 dp'nin piksel karşılığı. */
+    /**
+     * Dışta altın çizgi; LED ışığı alttan gelir, alt kenarda en parlak, yanlardan yukarı doğru söner.
+     * Alt kenarın hemen altında da hafif bir yansıma vardır. dp: 1 dp'nin piksel karşılığı.
+     */
     fun drawFrame(c: Canvas, r: RectF, radius: Float, dp: Float, led: Int) {
-        if (led != 0) {
-            val inset = 4f * dp
-            val rl = RectF(r.left + inset, r.top + inset, r.right - inset, r.bottom - inset)
-            val rr = maxOf(radius - inset, 0f)
-            c.drawRoundRect(rl, rr, rr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                color = led
-                strokeWidth = 4f * dp
-                maskFilter = BlurMaskFilter(5f * dp, BlurMaskFilter.Blur.NORMAL)
-            })
-            c.drawRoundRect(rl, rr, rr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                color = mix(led, 0xFFFFFFFF.toInt(), 0.45f)
-                strokeWidth = 1.2f * dp
-            })
-        }
+        if (led != 0) underGlow(c, r, radius, dp, led)
         val g = RectF(r.left + 1.2f * dp, r.top + 1.2f * dp, r.right - 1.2f * dp, r.bottom - 1.2f * dp)
         c.drawRoundRect(g, radius, radius, gold(g).apply { strokeWidth = 2.4f * dp })
+    }
+
+    private fun clear(color: Int) = color and 0x00FFFFFF
+
+    /** Alttan yanlara yayılan LED ışığı (çerçevenin içinde, altın çizginin hemen altında). */
+    private fun underGlow(c: Canvas, r: RectF, radius: Float, dp: Float, led: Int) {
+        val h = r.height()
+        // alttaki yansıma: alt kenar boyunca yayvan bir ışık
+        c.drawOval(
+            RectF(r.left + r.width() * 0.08f, r.bottom - minOf(16f * dp, h * 0.3f), r.right - r.width() * 0.08f, r.bottom - 1f * dp),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = led
+                alpha = 120
+                maskFilter = BlurMaskFilter(9f * dp, BlurMaskFilter.Blur.NORMAL)
+            })
+        val inset = 3.6f * dp
+        val rl = RectF(r.left + inset, r.top + inset, r.right - inset, r.bottom - inset)
+        val rr = maxOf(radius - inset, 0f)
+        // alttan yukarı sönen renk: üst kısım saydam
+        fun fade(col: Int) = LinearGradient(0f, rl.top, 0f, rl.bottom,
+            intArrayOf(clear(col), clear(col), col and 0x66FFFFFF.toInt() or 0x66000000, col),
+            floatArrayOf(0f, 0.3f, 0.65f, 1f), Shader.TileMode.CLAMP)
+        val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 5f * dp
+            shader = fade(led)
+            maskFilter = BlurMaskFilter(6f * dp, BlurMaskFilter.Blur.NORMAL)
+        }
+        c.drawRoundRect(rl, rr, rr, glow)
+        c.drawRoundRect(rl, rr, rr, glow)
+        c.drawRoundRect(rl, rr, rr, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.3f * dp
+            shader = fade(mix(led, 0xFFFFFFFF.toInt(), 0.45f))
+        })
     }
 
     private fun mix(a: Int, b: Int, t: Float): Int {
@@ -77,7 +100,7 @@ object LedStyle {
 
     private val iconCache = LruCache<String, Bitmap>(160)
 
-    /** Uygulama simgesi: koyu yuvarlak zemin, LED halka, altın çember ve ortada simge. */
+    /** Uygulama simgesi: yumuşak köşeli kare, koyu zemin, altın çizgi, alttan yanlara yayılan LED, ortada simge. */
     fun icon(c: Context, pkg: String, sizePx: Int): Bitmap? {
         val key = "$pkg@$sizePx@${ledName(c)}"
         iconCache.get(key)?.let { return it }
@@ -86,23 +109,21 @@ object LedStyle {
         val cv = Canvas(bmp)
         val dp = c.resources.displayMetrics.density
         val s = sizePx.toFloat()
-        val cx = s / 2
         val led = ledColor(c)
-        val outer = s / 2 - 2.5f * dp
-        cv.drawCircle(cx, cx, outer, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC08141B.toInt() })
+        // alt tarafta yansıma için biraz boşluk bırak
+        val shape = RectF(3f * dp, 2f * dp, s - 3f * dp, s - 6f * dp)
+        val radius = shape.width() * 0.28f
         if (led != 0) {
-            cv.drawCircle(cx, cx, outer - 4f * dp, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE; color = led; strokeWidth = 4f * dp
-                maskFilter = BlurMaskFilter(4.5f * dp, BlurMaskFilter.Blur.NORMAL)
-            })
-            cv.drawCircle(cx, cx, outer - 4f * dp, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE; color = mix(led, 0xFFFFFFFF.toInt(), 0.45f); strokeWidth = 1.1f * dp
-            })
+            cv.drawOval(RectF(shape.left + shape.width() * 0.12f, shape.bottom - 3f * dp, shape.right - shape.width() * 0.12f, s - 0.5f * dp),
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = led; alpha = 150
+                    maskFilter = BlurMaskFilter(4f * dp, BlurMaskFilter.Blur.NORMAL)
+                })
         }
-        val gr = RectF(cx - outer, cx - outer, cx + outer, cx + outer)
-        cv.drawCircle(cx, cx, outer, gold(gr).apply { strokeWidth = 2.6f * dp })
-        val inset = (s * 0.22f).toInt()
-        d.setBounds(inset, inset, sizePx - inset, sizePx - inset)
+        cv.drawRoundRect(shape, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xD908141B.toInt() })
+        drawFrame(cv, shape, radius, dp * 0.85f, led)
+        val inset = s * 0.2f
+        d.setBounds(inset.toInt(), (shape.top + inset - 2f * dp).toInt(), (s - inset).toInt(), (shape.bottom - inset + 2f * dp).toInt())
         d.draw(cv)
         iconCache.put(key, bmp)
         return bmp
