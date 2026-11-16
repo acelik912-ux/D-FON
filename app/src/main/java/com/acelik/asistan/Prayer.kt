@@ -98,6 +98,7 @@ object Prayer {
         if (!isEnabled(c) || !hasLocation(c)) return
         val p = prefs(c)
         val now = System.currentTimeMillis()
+        reassert(c)
         for ((name, t) in ezans(c, 0) + ezans(c, -1)) {
             val durMs = durationFor(c, name) * 60_000L
             if (t <= now && now < t + durMs - 60_000L && p.getLong("son_ezan", 0L) != t) {
@@ -362,6 +363,7 @@ object Prayer {
             val until = System.currentTimeMillis() + dur * 60_000L
             p.edit()
                 .putBoolean("biz_aldik", true)
+                .putInt("yeniden", 0)
                 .putInt("bizim_mod", audio.ringerMode)
                 .putLong("geri_al", until)
                 .apply()
@@ -376,6 +378,25 @@ object Prayer {
             return "Telefon $how alındı; ${fmt(until)}'de tekrar sesli olacak."
         }
         return "Telefon zaten sessiz ya da titreşimde olduğu için dokunmadım. Önce sesli yapıp tekrar dene."
+    }
+
+    /** Sessiz süresi içinde telefon sesliye dönmüşse (başka bir ayar/uygulama çevirdiyse) tekrar al. */
+    private fun reassert(c: Context) {
+        val p = prefs(c)
+        if (!p.getBoolean("biz_aldik", false)) return
+        val now = System.currentTimeMillis()
+        if (now >= p.getLong("geri_al", 0)) return
+        val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val want = p.getInt("bizim_mod", -1)
+        val tries = p.getInt("yeniden", 0)
+        if (want == -1 || audio.ringerMode == want || tries >= 4) return
+        p.edit().putInt("yeniden", tries + 1).apply()
+        try {
+            audio.ringerMode = want
+            log(c, "Süre içinde telefon sesliye dönmüştü; tekrar ${if (want == AudioManager.RINGER_MODE_VIBRATE) "titreşime" else "sessize"} aldım (${tries + 1}).")
+        } catch (e: Exception) {
+            log(c, "Süre içinde sesliye dönüldü, tekrar alınamadı: ${e.message}")
+        }
     }
 
     fun restore(c: Context) {
