@@ -2,6 +2,7 @@ package com.acelik.asistan
 
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.Calendar
 
 /**
  * Türkçe komutları anlayan, tamamen telefonda çalışan motor.
@@ -28,21 +29,109 @@ class CommandEngine(
         fresh.clear()
     }
 
+    /** Soru sorduğumuzda ("Alarm saat kaçta?") bir sonraki kısa cevabı bu komuta bağlarız. */
+    private class FollowUp(val prefix: String, val any: Boolean)
+    private var followUp: FollowUp? = null
+
+    /** "Bunu mu demek istedin?" diye önerilen ve "evet" bekleyen komut. */
+    private var suggestion: String? = null
+
+    /** En son anlaşılamayan söz ("Öğret" penceresi bunu hazır getirir). */
+    var lastUnknown: String? = null
+        private set
+
+    /** Pencere açması gereken komutlar için (kıble pusulası, imsakiye): MainActivity bağlar. */
+    var onUi: ((String) -> Unit)? = null
+
+    /** Telefonda yapay zeka yüklüyse, anlaşılamayan sözü ona sorar (yoksa null). */
+    var askAi: ((String) -> String?)? = null
+
+    private fun ask(prefix: String, question: String, any: Boolean = false): String {
+        followUp = FollowUp(prefix, any)
+        return question
+    }
+
     fun handle(raw: String): List<String> {
-        val text = raw.trim()
+        var text = raw.trim()
         if (text.isEmpty()) return emptyList()
-        val t = norm(text)
+        var t = norm(text)
+
+        // Bekleyen öneri: "evet" → çalıştır
+        val sug = suggestion
+        suggestion = null
+        if (sug != null) {
+            if (t in YES) return handle(sug)
+            if (t in NO) return listOf("Tamam, vazgeçtim.")
+        }
+
+        // Bekleyen soru: kısa cevabı sorulan komuta bağla ("Alarm saat kaçta?" → "7 buçuk")
+        val fu = followUp
+        followUp = null
+        if (fu != null) {
+            if (t in NO) return listOf("Tamam, vazgeçtim.")
+            val answerLike = tokens(t).size <= 5 &&
+                (fu.any || number(t) != null || has(t, "yari", "tam", "en yuksek", "en dusuk", "bucuk", "biraz"))
+            if (answerLike) {
+                text = "${fu.prefix} $text"
+                t = norm(text)
+            }
+        }
+
+        // Kullanıcının öğrettiği söz
+        ctx?.let { c -> Aliases.get(c, t)?.let { text = it; t = norm(it) } }
 
         if (has(t, "yardim", "neler yapabilirsin", "ne yapabilirsin", "komutlar")) return listOf(HELP)
 
+        core(text, t)?.let { return it }
+
+        // Anlaşılmadı: çok benzer bir komut varsa onu yap, biraz benzeri varsa sor
+        lastUnknown = text
+        val best = bestMatch(t)
+        if (best != null) {
+            if (best.second >= 0.90) {
+                core(best.first, norm(best.first))?.let { return listOf("(\"${best.first}\" olarak anladım)") + it }
+            } else if (best.second >= 0.68) {
+                suggestion = best.first
+                return listOf("Bunu mu demek istedin: \"${best.first}\"? (evet / hayır)")
+            }
+        }
+        askAi?.let { ai ->
+            try { ai(text)?.let { return listOf(it) } } catch (ignored: Exception) {}
+        }
+        return listOf(unknown(t))
+    }
+
+    /** Bilinen komutlar, rutin adları, öğretilen sözler ve izinli uygulamalar içinde en benzeri. */
+    private fun bestMatch(t: String): Pair<String, Double>? {
+        if (t.length < 4) return null
+        val candidates = ArrayList<String>(EXAMPLES)
+        ctx?.let { c ->
+            candidates.addAll(Routines.all(c).map { it.name })
+            candidates.addAll(Aliases.all(c).keys)
+        }
+        candidates.addAll(files.allowedApps().map { "${it.label} aç" })
+        val num = Regex("\\d+").find(t)?.value
+        var best: Pair<String, Double>? = null
+        for (cand in candidates) {
+            val sc = Nlu.similarity(t, norm(cand).replace(Regex("\\d+"), num ?: "0"))
+            if (best == null || sc > best.second) {
+                best = (if (num != null) cand.replace(Regex("\\d+"), num) else cand) to sc
+            }
+        }
+        return best
+    }
+
+    /** Asıl komut çözücü; anlaşılmazsa null. */
+    private fun core(text: String, t: String): List<String>? {
         routineCommand(t)?.let { return it }
+        reminderCommand(text, t)?.let { return listOf(it) }
         notesCommand(text, t)?.let { return listOf(it) }
-        prayerCommand(t)?.let { return listOf(it) }
         stopReading(t)?.let { return listOf(it) }
         textToDocument(text)?.let { return listOf(it) }
-        readCommand(t)?.let { return listOf(it) }
         contactCommand(text, t)?.let { return listOf(it) }
         webCommand(text)?.let { return listOf(it) }
+        prayerCommand(t)?.let { return listOf(it) }
+        readCommand(t)?.let { return listOf(it) }
         fileCommand(t)?.let { return listOf(it) }
 
         // Birden fazla komut: "parlaklığı 30 yap ve sessize al"
@@ -51,10 +140,10 @@ class CommandEngine(
         if (parts.size > 1) {
             val r = parts.map { single(it) }
             if (r.all { it != null }) return r.filterNotNull()
+            if (r.any { it != null }) return parts.indices.map { r[it] ?: unknown(parts[it]) }
         }
         single(t)?.let { return listOf(it) }
-        if (parts.size > 1) return parts.map { single(it) ?: unknown(it) }
-        return listOf(unknown(t))
+        return null
     }
 
     fun onFilesPicked(nos: List<Int>): List<String> {
@@ -114,11 +203,44 @@ class CommandEngine(
         depth++
         try {
             val out = mutableListOf("▶ ${r.name}")
-            r.commands.forEach { cmd -> out.addAll(handle(cmd)) }
+            r.commands.forEach { cmd -> out.addAll(core(cmd, norm(cmd)) ?: listOf(unknown(norm(cmd)))) }
             return listOf(out.joinToString("\n"))
         } finally {
             depth--
         }
+    }
+
+    // ---------------- hatırlatıcılar ----------------
+
+    private fun reminderCommand(raw: String, t: String): String? {
+        val c = ctx ?: return null
+        val tk = tokens(t)
+        if (tk.none { it.startsWith("hatirlat") }) return null
+        val listWord = tk.any { it.startsWith("hatirlatici") || it.startsWith("hatirlatma") }
+        if (listWord && tk.none { it == "kur" || it == "ekle" }) {
+            if (tk.any { it.startsWith("sil") }) {
+                val all = Reminders.all(c)
+                if (all.isEmpty()) return "Silinecek hatırlatıcı yok."
+                if (has(t, "hepsini", "tum", "butun")) {
+                    all.forEach { Reminders.remove(c, it.id) }
+                    return "🗑 Tüm hatırlatıcılar silindi."
+                }
+                val r = all.getOrNull((number(t) ?: all.size) - 1) ?: return "O numarada hatırlatıcı yok."
+                Reminders.remove(c, r.id)
+                return "🗑 Silindi: ${r.text}"
+            }
+            return Reminders.listText(c)
+        }
+        val cleaned = raw.replace(Regex(":(?!\\d)"), " ")
+        val w = Nlu.parseWhen(cleaned, Calendar.getInstance())
+        if (w == null) {
+            val what = cleaned.trim().split(Regex("\\s+"))
+                .filter { !norm(it).startsWith("hatirlat") && norm(it) !in setOf("bana", "beni") }.joinToString(" ")
+            return ask("hatırlat $what", "Ne zaman hatırlatayım? Örn: \"yarın 10'da\", \"akşam 8'de\", \"20 dakika sonra\".", true)
+        }
+        if (w.text.isBlank()) return "Neyi hatırlatayım? Örn: \"yarın 10'da faturayı hatırlat\"."
+        Reminders.add(c, w.text, w.time)
+        return "⏰ Hatırlatıcı kuruldu: ${Reminders.whenText(w.time)} — ${w.text}"
     }
 
     // ---------------- notlar ----------------
@@ -162,19 +284,37 @@ class CommandEngine(
 
     // ---------------- kişiler ----------------
 
+    private val sendStems = listOf("yaz", "at", "gonder", "yolla")
+    private val waWords = listOf("whatsapp", "vatsap", "watsap", "whatsap")
+
     private fun contactCommand(raw: String, t: String): String? {
         val ct = contacts ?: return null
         val tk = tokens(t)
+        val whatsapp = tk.any { w -> waWords.any { w.startsWith(it) } }
+        // "Ahmet'e mesaj yaz geliyorum", "Ahmet'e mesaj yaz: geliyorum", "Ahmet'e WhatsApp'tan yaz geliyorum"
         val mi = tk.indexOf("mesaj")
-        if (mi > 0 && (mi == tk.size - 1 || raw.contains(':') ||
-                tk.drop(mi + 1).all { it in setOf("yaz", "at", "gonder", "yolla") })
-        ) {
-            val name = tk.subList(0, mi).joinToString(" ")
-            val body = raw.substringAfter(':', "").trim()
-            return withContact(ct, name) { ct.message(it, body) }
+        val vi = when {
+            mi > 0 -> mi
+            whatsapp -> tk.indexOfFirst { Nlu.isVerb(it, sendStems) }
+            else -> -1
         }
-        if (tk.size >= 2 && tk.last() == "ara") {
-            var nameTk = tk.dropLast(1)
+        if (vi > 0) {
+            val nameTk = tk.subList(0, vi).filter { w ->
+                waWords.none { w.startsWith(it) } &&
+                    w !in setOf("tan", "dan", "ten", "den", "ta", "da", "te", "de", "uzerinden", "ile", "sms", "bir")
+            }
+            if (nameTk.isNotEmpty()) {
+                val body = if (raw.contains(':')) raw.substringAfter(':').trim() else messageBody(raw)
+                return withContact(ct, nameTk.joinToString(" ")) {
+                    if (whatsapp) ct.whatsapp(it, body) else ct.message(it, body)
+                }
+            }
+        }
+        // "Annemi ara", "Ahmet'i arar mısın"
+        var callTk = tk
+        while (callTk.size > 1 && callTk.last() in setOf("misin", "misiniz", "lutfen")) callTk = callTk.dropLast(1)
+        if (callTk.size >= 2 && Nlu.isVerb(callTk.last(), listOf("ara"))) {
+            var nameTk = callTk.dropLast(1)
             if (nameTk.lastOrNull() == "telefonla") nameTk = nameTk.dropLast(1)
             val first = nameTk.firstOrNull() ?: return null
             if (listOf("google", "internet", "web", "youtube", "vikipedi", "wikipedi", "harita").any { first.startsWith(it) }) return null
@@ -191,6 +331,18 @@ class CommandEngine(
             return pickContact(ct, hits) { ct.call(it) }
         }
         return null
+    }
+
+    /** "… mesaj yaz geliyorum" → "geliyorum" (özgün yazımıyla). */
+    private fun messageBody(raw: String): String {
+        val words = raw.trim().split(Regex("\\s+"))
+        val n = words.map { norm(it) }
+        var i = n.indexOf("mesaj")
+        if (i < 0) i = n.indexOfFirst { Nlu.isVerb(it, sendStems) } - 1
+        if (i < -1) return ""
+        var rest = words.drop(i + 1)
+        if (rest.isNotEmpty() && Nlu.isVerb(norm(rest[0]), sendStems)) rest = rest.drop(1)
+        return rest.joinToString(" ").trim()
     }
 
     private fun withContact(ct: ContactTools, name: String, action: (ContactTools.Contact) -> String): String {
@@ -213,6 +365,14 @@ class CommandEngine(
 
     private fun prayerCommand(t: String): String? {
         val c = ctx ?: return null
+        if (has(t, "kible")) {
+            onUi?.invoke("kible")
+            return "🧭 Kıble pusulası açılıyor."
+        }
+        if (has(t, "imsakiye", "aylik vakit", "bu ayin vakit")) {
+            onUi?.invoke("imsakiye")
+            return "🗓 30 günlük vakit çizelgesi açılıyor."
+        }
         if (!has(t, "namaz", "ezan")) return null
         if (tokens(t).any { it.startsWith("sessiz") || it.startsWith("sustur") }) {
             val o = onOff(t)
@@ -233,7 +393,8 @@ class CommandEngine(
     }
 
     private fun unknown(t: String) =
-        "\"$t\" komutunu anlayamadım. Neler yapabildiğimi görmek için \"yardım\" yaz."
+        "\"$t\" komutunu anlayamadım. \"yardım\" yazarak neler yapabildiğimi görebilir ya da D-FON bölümündeki " +
+            "🎓 Öğret ile bu sözü bildiğim bir komuta bağlayabilirsin."
 
     // ---------------- sesli okuma ----------------
 
@@ -299,7 +460,7 @@ class CommandEngine(
             val sec = durationSeconds(t)
             if (sec == null) {
                 if (number(t) == null) return clock.showTimers()
-                return "Ne kadar süre? Örn: \"5 dakika zamanlayıcı\", \"1 saat 20 dakika sayaç kur\"."
+                return ask("zamanlayıcı", "Ne kadar süre? Örn: \"5 dakika\", \"1 saat 20 dakika\".")
             }
             return clock.setTimer(sec.coerceIn(1, 86400), "D-FON")
         }
@@ -315,7 +476,7 @@ class CommandEngine(
         if (dur != null && !clockTime) return clock.setTimer(dur.coerceIn(1, 86400), "D-FON") // "10 dakika sonra alarm"
 
         val hm = alarmTime(t)
-            ?: return "Alarm saat kaçta? Örn: \"alarm 7:30\", \"sabah 6'da uyandır\", \"akşam 9 buçukta alarm kur\"."
+            ?: return ask("alarm saat", "Alarm saat kaçta? Örn: \"7:30\", \"sabah 6\", \"akşam 9 buçuk\".")
         return clock.setAlarm(hm.first, hm.second, "D-FON")
     }
 
@@ -361,7 +522,14 @@ class CommandEngine(
     // ---------------- telefon ----------------
 
     private fun status(t: String): String? {
-        if (!has(t, "durum", "pil", "sarj", "batarya") || has(t, "tasarruf")) return null
+        val stk = tokens(t)
+        val battery = stk.any {
+            (it.startsWith("pil") && it.length <= 6 && it !in setOf("pilav", "pilot", "pilic", "pilli")) ||
+                it.startsWith("sarj") || it.startsWith("batarya")
+        }
+        val phoneStatus = t == "durum" || has(t, "telefon durumu", "telefonun durumu", "durumu soyle", "durum nedir",
+            "durum ne", "durumu goster", "durum raporu")
+        if (!(battery || phoneStatus) || has(t, "tasarruf", "hava")) return null
         val s = st() ?: return "Durum okunamadı."
         val v = s.optJSONObject("ses_yuzde") ?: JSONObject()
         return buildString {
@@ -427,7 +595,7 @@ class CommandEngine(
         }
         val cur = st()?.optInt("parlaklik_yuzde") ?: 50
         val lvl = if (tk.any { it.startsWith("karart") } && number(t) == null) (cur - 20).coerceAtLeast(1)
-        else level(t, cur, false) ?: return "Parlaklığı kaç yapayım? Örn: \"parlaklık 40\" ya da \"parlaklığı artır\"."
+        else level(t, cur, false) ?: return ask("parlaklık", "Parlaklığı kaç yapayım? Örn: \"40\" ya da \"yarıya\".")
         return run("ekran_parlakligi_ayarla", JSONObject().put("seviye", lvl.coerceAtLeast(1)))
     }
 
@@ -447,7 +615,7 @@ class CommandEngine(
         val stream = type ?: "medya"
         val cur = st()?.optJSONObject("ses_yuzde")?.optInt(stream) ?: 50
         val lvl = level(t, cur, true)
-            ?: return "Sesi kaç yapayım? Örn: \"medya sesi 50\", \"zil sesini artır\", \"sesi kapat\"."
+            ?: return ask("$stream sesi", "Sesi kaç yapayım? Örn: \"50\", \"yarıya\", \"en yüksek\".")
         return run("ses_seviyesi", JSONObject().put("tur", stream).put("seviye", lvl))
     }
 
@@ -459,7 +627,7 @@ class CommandEngine(
         val sec = when {
             has(t, "yarim dakika") -> 30
             else -> {
-                val n = number(t) ?: return "Ekran kaç dakika sonra kapansın? Örn: \"ekran 2 dakikada kapansın\"."
+                val n = number(t) ?: return ask("ekran zaman aşımı", "Ekran kaç dakika sonra kapansın? Örn: \"2 dakika\".")
                 when {
                     has(t, "dakika", " dk") -> n * 60
                     has(t, "saniye", " sn") -> n
@@ -518,6 +686,11 @@ class CommandEngine(
     // ---------------- internet (tarayıcıda) ----------------
 
     private fun webCommand(raw: String): String? {
+        val nt = norm(raw)
+        if (nt.startsWith("hava durumu") || nt.startsWith("hava nasil") || nt.startsWith("bugun hava") || nt.startsWith("yarin hava")) {
+            files.openUrl("https://www.google.com/search?q=" + URLEncoder.encode(raw.trim(), "UTF-8"))
+            return "🌤 Hava durumu tarayıcıda açılıyor…"
+        }
         val lower = raw.lowercase()
         Regex("(https?://\\S+)|(\\b[a-z0-9-]+(\\.[a-z0-9-]+)*\\.(com|net|org|tr|io|edu|gov|info|app|dev)(/\\S*)?)")
             .find(lower)?.let { return files.openUrl(it.value) }
@@ -685,7 +858,7 @@ class CommandEngine(
     private fun onOff(t: String): Boolean? {
         val tk = tokens(t)
         if (tk.any { it.startsWith("kapa") || it.startsWith("sondur") || it == "iptal" } || has(t, "devre disi")) return false
-        if (tk.any { (it.startsWith("ac") && !it.startsWith("acil")) || it == "yak" || it.startsWith("etkin") || it == "aktif" }) return true
+        if (tk.any { Nlu.isVerb(it, listOf("ac")) || it.startsWith("acik") || it == "yak" || it.startsWith("etkin") || it == "aktif" }) return true
         return null
     }
 
@@ -694,13 +867,7 @@ class CommandEngine(
             it.startsWith("dusur") || it.startsWith("kis") || it.startsWith("kapa")
     }
 
-    private fun number(t: String): Int? {
-        Regex("\\d+").find(t)?.let { return it.value.toIntOrNull() }
-        var sum = 0
-        var found = false
-        for (tk in tokens(t)) NUM_WORDS[tk]?.let { sum += it; found = true }
-        return if (found) sum else null
-    }
+    private fun number(t: String): Int? = Nlu.number(t)
 
     /** Hedef yüzde. current: şu anki yüzde. */
     private fun level(t: String, current: Int, offMeansZero: Boolean): Int? {
@@ -710,8 +877,8 @@ class CommandEngine(
         if (offMeansZero && tk.any { it.startsWith("kapa") }) return 0
         if (tk.any { it.startsWith("yari") }) return 50
         number(t)?.let { return it.coerceIn(0, 100) }
-        val step = if (tk.any { it.startsWith("biraz") }) 10 else 20
-        if (tk.any { it.startsWith("artir") || it.startsWith("arttir") || it.startsWith("yuksel") || it.startsWith("cogal") || (it.startsWith("ac") && !it.startsWith("acil")) }) {
+        val step = if (Nlu.smallStep(t)) 10 else 20
+        if (tk.any { it.startsWith("artir") || it.startsWith("arttir") || it.startsWith("yuksel") || it.startsWith("cogal") || Nlu.isVerb(it, listOf("ac")) }) {
             return (current + step).coerceAtMost(100)
         }
         if (tk.any { it.startsWith("azal") || it.startsWith("dusur") || it.startsWith("kis") || it.startsWith("karart") }) {
@@ -723,6 +890,21 @@ class CommandEngine(
     private data class Screen(val words: List<String>, val key: String, val locked: Boolean)
 
     companion object {
+        private val YES = setOf("evet", "evet yap", "aynen", "olur", "he", "hi hi", "tamam", "onayla")
+        private val NO = setOf("hayir", "yok", "vazgec", "iptal", "bosver", "istemiyorum")
+
+        /** Benzer komut önermek için bilinen örnekler. */
+        val EXAMPLES = listOf(
+            "feneri aç", "feneri kapat", "parlaklık 50", "parlaklığı artır", "parlaklığı azalt", "otomatik parlaklığı aç",
+            "medya sesi 50", "sesi artır", "sesi azalt", "sesi kapat", "zil sesi 50", "sessize al", "titreşime al",
+            "sessizden çık", "rahatsız etmeyi aç", "rahatsız etmeyi kapat", "gece modu", "gündüz modu", "durum",
+            "saat kaç", "bugün günlerden ne", "alarmları göster", "namaz vakitleri", "ezanda sessize al", "kıble",
+            "imsakiye", "notlarım", "notlarımı oku", "hatırlatıcılarım", "rutinlerim", "uygulamalar", "wifi", "bluetooth",
+            "karanlık mod", "konum", "uçak modu", "pdf'i word'e çevir", "word'ü pdf yap", "resimleri pdf yap",
+            "pdf'leri birleştir", "pdf'i resme çevir", "pdf'i oku", "ekrandaki yazıyı oku", "dosyayı aç",
+            "otomatik döndürmeyi aç", "otomatik döndürmeyi kapat", "hava durumu", "yardım"
+        )
+
         private val NUM_WORDS = mapOf(
             "bir" to 1, "iki" to 2, "uc" to 3, "dort" to 4, "bes" to 5, "alti" to 6, "yedi" to 7,
             "sekiz" to 8, "dokuz" to 9, "on" to 10, "yirmi" to 20, "otuz" to 30, "kirk" to 40,
@@ -764,14 +946,16 @@ Neler yapabilirim (hepsi internetsiz, telefonunda):
 🔦 "feneri aç", "gece modu", "gündüz modu", "durum" (pil ve ayarlar)
 ⏰ Saat: "alarm 7:30", "sabah 6'da uyandır", "akşam 9 buçukta alarm kur", "5 dakika zamanlayıcı", "1 saat 20 dakika sayaç kur", "alarmları göster", "saat kaç", "bugün günlerden ne"
 ⚡ Rutinler: "uyku modu", "sabah modu", "rutinlerim" (Butonlar ekranından kendi rutinini ekle; istersen her gün belli saatte çalışır)
-📝 Notlar: "not al: ekmek al", "notlarım", "notlarımı oku", "son notu sil"
-📞 Kişiler: "annemi ara", "Ahmet'i ara", "Ahmet'e mesaj yaz: geliyorum"
-🕌 Namaz: "namaz vakitleri", "ezanda sessize al", "ezanda sessize almayı kapat"
+📝 Notlar: "not al ekmek al", "notlarım", "notlarımı oku", "son notu sil"
+⏰ Hatırlatıcı: "yarın 10'da faturayı hatırlat", "20 dakika sonra çayı hatırlat", "hatırlatıcılarım"
+📞 Kişiler: "annemi ara", "Ahmet'e mesaj yaz geliyorum", "Ahmet'e WhatsApp'tan yaz geliyorum"
+🕌 Namaz: "namaz vakitleri", "ezanda sessize al", "kıble", "imsakiye"
+🎓 Anlamadığım bir sözü D-FON bölümündeki "Öğret" ile bir komuta bağlayabilirsin
 ⚙ Ayar ekranları: "Wi-Fi", "Bluetooth", "karanlık mod", "yazı boyutu", "duvar kağıdı", "konum", "uçak modu"…
 📱 Uygulamalar: "WhatsApp'ı aç", "uygulamalar" (sadece izin verdiklerin)
 📄 Dosyalar: "PDF'i Word'e çevir", "Word'ü PDF yap", "resimleri PDF yap", "PDF'leri birleştir", "PDF'i resme çevir", "dosyayı aç", "dosyayı WhatsApp'tan gönder"
 ✍ "PDF yap: metnin…" / "Word yap: metnin…"
-🖐 Sesle başka uygulamayı kullan ("👂 Uyandırma" ve "D-FON Uygulama Kilidi ve Sesli Kontrol" açıkken): "Bir iki üç fon, YouTube'u aç" → sonra 25 sn boyunca sözü tekrar etmeden: "aşağı kaydır", "yukarı kaydır", "Abonelikler'e dokun", "neler var", "ekranı oku", "yaz: ninni", "geri", "ana ekran", "tamam" (dinlemeyi bitirir).
+🖐 Sesle başka uygulamayı kullan ("👂 Uyandırma" ve "D-FON Uygulama Kilidi ve Sesli Kontrol" açıkken): "Bir iki üç fon, YouTube'u aç" → sonra 25 sn boyunca sözü tekrar etmeden: "aşağı kaydır", "yukarı kaydır", "Abonelikler'e dokun", "neler var", "ekranı oku", "yaz ninni", "geri", "ana ekran", "tamam" (dinlemeyi bitirir).
 🎤 Ortadaki büyük mikrofona dokunup söyle. "👂 Uyandırma"yı açarsan ekran açıkken "Bir iki üç fon" demen yeter; arkasından komutu da söyleyebilirsin: "Bir iki üç fon, feneri aç".
 🔊 Okuma: "PDF'i oku", "Word'ü oku", "dosyayı oku", "oku: metin…", "ekrandaki yazıyı oku", "dur" (susar). Başka bir uygulamada yazı seçip menüden "D-FON ile oku" da diyebilirsin.
 🌐 İnternet (tarayıcıda açılır): "hava durumu ara", "YouTube'da Kuran tilaveti izle", "Vikipedi'de Osmanlı ara", "trt.net.tr"

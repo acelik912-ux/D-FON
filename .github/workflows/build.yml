@@ -23,6 +23,14 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: İnternet izni olmadığını doğrula
+        run: |
+          if grep -v "^\s*<!--" app/src/main/AndroidManifest.xml | grep -q 'uses-permission android:name="android.permission.INTERNET"'; then
+            echo "INTERNET izni bulundu!"; exit 1; fi
+
+      - name: Testleri çalıştır
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
       - name: APK derle
         run: gradle assembleRelease --no-daemon --stacktrace
 

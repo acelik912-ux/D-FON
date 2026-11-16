@@ -8,7 +8,6 @@ import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
@@ -131,26 +130,25 @@ object LedStyle {
     }
 
     /** Widget'ların ve kutuların arkasına konan çerçeve. */
-    class FrameDrawable(private val ctx: Context, private val radiusDp: Float, private val fill: Int = 0x66061016) : Drawable() {
-        private var cache: Bitmap? = null
+    /** Aynı boyuttaki çerçeveler tek bir resmi paylaşır (her düğme için yeniden çizilmez). */
+    private val frameCache = LruCache<String, Bitmap>(24)
 
-        override fun onBoundsChange(bounds: Rect) {
-            super.onBoundsChange(bounds)
-            cache = null
-        }
+    class FrameDrawable(private val ctx: Context, private val radiusDp: Float, private val fill: Int = 0x66061016) : Drawable() {
 
         override fun draw(canvas: Canvas) {
             val b = bounds
             if (b.width() <= 0 || b.height() <= 0) return
-            val bmp = cache ?: Bitmap.createBitmap(b.width(), b.height(), Bitmap.Config.ARGB_8888).also { bm ->
+            val led = ledColor(ctx)
+            val key = "${b.width()}x${b.height()}|$radiusDp|$fill|$led"
+            val bmp = frameCache.get(key) ?: Bitmap.createBitmap(b.width(), b.height(), Bitmap.Config.ARGB_8888).also { bm ->
                 val c = Canvas(bm)
                 val dp = ctx.resources.displayMetrics.density
                 val r = RectF(0f, 0f, b.width().toFloat(), b.height().toFloat())
                 val rad = radiusDp * dp
                 if (fill != 0) c.drawRoundRect(RectF(2 * dp, 2 * dp, r.right - 2 * dp, r.bottom - 2 * dp), rad, rad,
                     Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fill })
-                drawFrame(c, r, rad, dp, ledColor(ctx))
-                cache = bm
+                drawFrame(c, r, rad, dp, led)
+                frameCache.put(key, bm)
             }
             canvas.drawBitmap(bmp, b.left.toFloat(), b.top.toFloat(), null)
         }

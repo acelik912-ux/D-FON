@@ -80,6 +80,7 @@ object Prayer {
     /** Ne olduğunu kullanıcıya göstermek için son ezan olayını saklar. */
     private fun log(c: Context, text: String) {
         prefs(c).edit().putString("son_olay", text).apply()
+        Diag.log(c, "namaz", text)
     }
     fun lastEvent(c: Context): String? = prefs(c).getString("son_olay", null)
 
@@ -97,8 +98,8 @@ object Prayer {
         if (!isEnabled(c) || !hasLocation(c)) return
         val p = prefs(c)
         val now = System.currentTimeMillis()
-        val durMs = duration(c) * 60_000L
         for ((name, t) in ezans(c, 0) + ezans(c, -1)) {
+            val durMs = durationFor(c, name) * 60_000L
             if (t <= now && now < t + durMs - 60_000L && p.getLong("son_ezan", 0L) != t) {
                 p.edit().putLong("son_ezan", t).apply()
                 val left = Math.ceil((t + durMs - now) / 60_000.0).toInt()
@@ -132,16 +133,34 @@ object Prayer {
     fun timesFor(c: Context, dayOffset: Int): LongArray? {
         if (!hasLocation(c)) return null
         val day = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, dayOffset) }
-        return PrayerTimes.forDay(day, lat(c), lon(c))
+        val t = PrayerTimes.forDay(day, lat(c), lon(c))
+        for (i in 0 until 6) t[i] += offset(c, i) * 60_000L
+        return t
     }
+
+    /** Kullanıcının her vakit için verdiği dakika düzeltmesi (Diyanet takvimine tam uydurmak için). */
+    fun offset(c: Context, i: Int) = prefs(c).getInt("duzeltme_$i", 0)
+    fun setOffset(c: Context, i: Int, min: Int) = prefs(c).edit().putInt("duzeltme_$i", min.coerceIn(-30, 30)).apply()
+
+    /** Cuma günü öğle vaktinde ayrı sessiz süresi (dk); 0 = diğer vakitlerle aynı. */
+    fun cumaDuration(c: Context) = prefs(c).getInt("cuma_sure", 0)
+    fun setCumaDuration(c: Context, min: Int) = prefs(c).edit().putInt("cuma_sure", min).apply()
+    fun durationFor(c: Context, name: String) =
+        if (name == "Cuma" && cumaDuration(c) > 0) cumaDuration(c) else duration(c)
+
+    /** D-FON açıldığında konum belirgin değiştiyse vakitleri kendiliğinden güncelle (sadece GPS konumunda). */
+    fun autoLocation(c: Context) = prefs(c).getBoolean("oto_konum", true)
+    fun setAutoLocation(c: Context, on: Boolean) = prefs(c).edit().putBoolean("oto_konum", on).apply()
 
     /** Sessize alma anları (seçili vakitler), bugünden itibaren. */
     private fun ezans(c: Context, dayOffset: Int): List<Pair<String, Long>> {
         val t = timesFor(c, dayOffset) ?: return emptyList()
         val sel = selected(c)
+        val friday = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, dayOffset) }
+            .get(Calendar.DAY_OF_WEEK) == Calendar.FRIDAY
         return SLOTS.filter { it.first in sel }.map { (name, idx) ->
             val extra = if (idx == PrayerTimes.IMSAK) sabahOffset(c) * 60_000L else 0L
-            name to t[idx] + extra
+            (if (friday && idx == PrayerTimes.OGLE) "Cuma" else name) to t[idx] + extra
         }
     }
 
@@ -329,7 +348,7 @@ object Prayer {
     fun silenceNow(c: Context, name: String, minutesOverride: Int? = null): String {
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val p = prefs(c)
-        val dur = minutesOverride ?: duration(c)
+        val dur = minutesOverride ?: durationFor(c, name)
         // Kullanıcı zaten sessiz/titreşimdeyse dokunma
         if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
             var target = if (mode(c) == "titresim") AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_SILENT
@@ -435,6 +454,10 @@ object Prayer {
                 recover(c)
                 refreshExtras(c)
                 Routines.schedule(c)
+                Reminders.schedule(c)
+                if (i.action == Intent.ACTION_BOOT_COMPLETED && WakeService.isEnabled(c)) {
+                    WakeService.notifyStopped(c, "Telefon yeniden başladı: sesle uyandırma kapalı")
+                }
             }
         }
     }

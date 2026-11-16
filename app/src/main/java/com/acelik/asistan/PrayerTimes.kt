@@ -79,6 +79,16 @@ object PrayerTimes {
         }
     }
 
+    /** Kıble açısı: gerçek kuzeyden saat yönünde derece (Kâbe: 21.4225 K, 39.8262 D). */
+    fun qibla(lat: Double, lon: Double): Double {
+        val kLat = 21.4225
+        val kLon = 39.8262
+        val dLon = kLon - lon
+        val y = sind(dLon) * cosd(kLat)
+        val x = cosd(lat) * sind(kLat) - sind(lat) * cosd(kLat) * cosd(dLon)
+        return fix(atan2d(y, x), 360.0)
+    }
+
     /** [eğim (derece), zaman denklemi (saat)] */
     private fun sunPosition(jd: Double): DoubleArray {
         val dd = jd - 2451545.0

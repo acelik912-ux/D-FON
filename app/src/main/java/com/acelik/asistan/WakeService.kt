@@ -50,13 +50,23 @@ class WakeService : Service(), RecognitionListener {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         val n = notification()
-        if (Build.VERSION.SDK_INT >= 30) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIF_ID, n)
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIF_ID, n)
+            }
+        } catch (e: Exception) {
+            // Android, mikrofonlu servisin arka plandan (sistem yeniden başlatınca) açılmasına izin vermez.
+            Diag.log(this, "uyandirma", "Arka planda başlatılamadı: ${e.javaClass.simpleName}")
+            notifyStopped(this, "Sesle uyandırma durdu")
+            failed = true
+            stopSelf()
+            return
         }
+        instance = this
+        Diag.log(this, "uyandirma", "Dinleme başladı")
         val f = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -81,7 +91,10 @@ class WakeService : Service(), RecognitionListener {
         return START_STICKY
     }
 
+    private var failed = false
+
     override fun onDestroy() {
+        if (failed) { super.onDestroy(); return }
         instance = null
         handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(screen) } catch (_: Exception) {}
@@ -158,8 +171,8 @@ class WakeService : Service(), RecognitionListener {
             // Ekranda yapılamayan ama D-FON'un anlayacağı bir komutsa ("feneri kapat") D-FON'a ilet
             val first = list.firstOrNull().orEmpty()
             val tk = FileTools.norm(first).split(" ")
-            if (tk.any { w -> FOLLOW_VERBS.any { w.startsWith(it) } }) {
-                val tapLike = tk.any { w -> listOf("dokun", "bas", "tikla", "gir").any { w.startsWith(it) } }
+            if (Nlu.hasVerb(tk, FOLLOW_VERBS)) {
+                val tapLike = Nlu.hasVerb(tk, listOf("dokun", "bas", "tikla", "gir"))
                 if (tapLike) {
                     tryHere(first, true) // bulunamazsa kısa bir uyarı gösterir
                     schedule(400)
@@ -270,6 +283,7 @@ class WakeService : Service(), RecognitionListener {
         private const val CHANNEL = "uyandirma"
         private const val NOTIF_ID = 7
         private const val NOTIF_WAKE = 8
+        private const val NOTIF_STOPPED = 9
 
         @Volatile
         var instance: WakeService? = null
@@ -300,6 +314,32 @@ class WakeService : Service(), RecognitionListener {
 
         fun stop(c: Context) {
             c.stopService(Intent(c, WakeService::class.java))
+        }
+
+        /** Tanılama için: hangi dinleme motoru kullanılıyor. */
+        fun engineName(c: Context): String = "telefonun ses tanıması"
+
+        /** Dinleme durduysa (sistem kapattı / telefon yeniden başladı) dokununca geri açan bildirim. */
+        fun notifyStopped(c: Context, title: String) {
+            try {
+                val nm = c.getSystemService(NotificationManager::class.java)
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL, "Sesle uyandırma", NotificationManager.IMPORTANCE_LOW)
+                )
+                val open = PendingIntent.getActivity(
+                    c, 5, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_IMMUTABLE
+                )
+                val n = Notification.Builder(c, CHANNEL)
+                    .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setContentTitle(title)
+                    .setContentText("Yeniden başlatmak için dokun (D-FON açılınca dinleme geri gelir)")
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(NOTIF_STOPPED, n)
+            } catch (ignored: Exception) {
+            }
         }
     }
 }

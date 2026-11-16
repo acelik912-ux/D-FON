@@ -6,8 +6,14 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
@@ -56,14 +62,79 @@ class AppLockService : AccessibilityService() {
 
     enum class Dir { UP, DOWN, LEFT, RIGHT }
 
+    private val handler = Handler(Looper.getMainLooper())
+    private val limitHit = Runnable { onLimit() }
+
+    /** Ekran kapanınca süre sayımı durur, açılınca devam eder. */
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            when (i.action) {
+                Intent.ACTION_SCREEN_OFF -> pauseCount()
+                Intent.ACTION_USER_PRESENT -> resumeCount()
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        val f = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(screen, f, Context.RECEIVER_NOT_EXPORTED)
+            else registerReceiver(screen, f)
+        } catch (ignored: Exception) {
+        }
+        Diag.log(this, "kilit", "Erişilebilirlik servisi bağlandı")
     }
 
     override fun onDestroy() {
+        pauseCount()
+        try { unregisterReceiver(screen) } catch (ignored: Exception) {}
         if (instance === this) instance = null
         super.onDestroy()
+    }
+
+    // ---------------- günlük süre sınırı ----------------
+
+    private var sessionStart = 0L
+
+    private fun resumeCount() {
+        val p = session ?: return
+        if (Guard.limit(this, p) <= 0 || sessionStart > 0) return
+        sessionStart = System.currentTimeMillis()
+        handler.removeCallbacks(limitHit)
+        handler.postDelayed(limitHit, Guard.remainingMs(this, p).coerceAtLeast(0))
+    }
+
+    private fun pauseCount() {
+        handler.removeCallbacks(limitHit)
+        val p = session ?: return
+        if (sessionStart > 0) {
+            Guard.addUsage(this, p, System.currentTimeMillis() - sessionStart)
+            sessionStart = 0
+        }
+    }
+
+    private fun endSession() {
+        pauseCount()
+        session = null
+    }
+
+    private fun onLimit() {
+        val p = session ?: return
+        endSession()
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        say("⏳ ${appName(p)} için bugünkü süre doldu.")
+        Diag.log(this, "kilit", "Süre doldu: $p")
+    }
+
+    private fun appName(pkg: String) = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: Exception) {
+        "Bu uygulama"
     }
 
     // ---------------- sesle ekran kontrolü ----------------
@@ -131,8 +202,7 @@ class AppLockService : AccessibilityService() {
         return true
     }
 
-    /** Görünen yazısı söylenene en çok benzeyen öğeye dokunur. */
-    fun clickText(query: String, reportMissing: Boolean): Boolean {
+    private fun best(query: String): AccessibilityNodeInfo? {
         val q = FileTools.norm(query)
         var best: AccessibilityNodeInfo? = null
         var bestScore = 0
@@ -149,7 +219,15 @@ class AppLockService : AccessibilityService() {
             } - minOf(ln.length / 20, 10)
             if (score > bestScore) { bestScore = score; best = n }
         }
-        val n = best
+        return best
+    }
+
+    /** Söylenene en çok benzeyen ekran öğesinin yazısı (yoksa null). */
+    fun findLabel(query: String): String? = best(query)?.let { label(it) }
+
+    /** Görünen yazısı söylenene en çok benzeyen öğeye dokunur. */
+    fun clickText(query: String, reportMissing: Boolean): Boolean {
+        val n = best(query)
         if (n == null) {
             if (reportMissing) say("\"$query\" ekranda bulunamadı. \"Neler var\" diyerek seçenekleri dinleyebilirsin.")
             return false
@@ -183,7 +261,7 @@ class AppLockService : AccessibilityService() {
         return true
     }
 
-    private fun say(msg: String) {
+    fun say(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 
@@ -206,11 +284,17 @@ class AppLockService : AccessibilityService() {
 
         // Başka bir uygulamaya (ana ekran dahil) geçildiyse oturum biter.
         // İzin penceresi gibi simgesi olmayan sistem ekranları oturumu bozmaz.
-        if (pkg != session && isRealApp(pkg)) session = null
+        if (pkg != session && isRealApp(pkg)) endSession()
         if (!AppLock.isLocked(this, pkg)) return
         if (session == pkg) return
         if (AppLock.takePass(this, pkg)) {
+            if (Guard.limit(this, pkg) > 0 && Guard.remainingMs(this, pkg) <= 0) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                say("⏳ ${appName(pkg)} için bugünkü süre doldu.")
+                return
+            }
             session = pkg
+            resumeCount()
             return
         }
         block(pkg)
@@ -221,16 +305,13 @@ class AppLockService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastBlock > 2000) {
             lastBlock = now
-            val name = try {
-                packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-            } catch (e: Exception) {
-                "Bu uygulama"
-            }
-            Toast.makeText(this, "🔒 $name sadece D-FON'dan açılır.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "🔒 ${appName(pkg)} sadece D-FON'dan açılır.", Toast.LENGTH_SHORT).show()
         }
     }
 
     private val realCache = HashMap<String, Boolean>()
+    private var imePkgs: Set<String> = emptySet()
+    private var imeAt = 0L
 
     private fun isRealApp(pkg: String): Boolean = realCache.getOrPut(pkg) {
         packageManager.getLaunchIntentForPackage(pkg) != null || isHome(pkg)
@@ -244,8 +325,13 @@ class AppLockService : AccessibilityService() {
     /** Klavye, bildirim perdesi, sistem pencereleri ve D-FON'un kendisi oturumu bozmasın. */
     private fun ignored(pkg: String): Boolean {
         if (pkg == "android" || pkg == "com.android.systemui") return true
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        return imm.enabledInputMethodList.any { it.packageName == pkg }
+        val now = System.currentTimeMillis()
+        if (now - imeAt > 60_000) {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            imePkgs = imm.enabledInputMethodList.map { it.packageName }.toSet()
+            imeAt = now
+        }
+        return pkg in imePkgs
     }
 
     override fun onInterrupt() {}

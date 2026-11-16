@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
 import org.json.JSONArray
 import org.json.JSONObject
@@ -99,51 +101,77 @@ class ContactTools(private val activity: Activity) {
         return out.values.toList()
     }
 
-    /** "annemi", "ahmet i", "ayşeye" → rehberdeki en uygun kişi(ler). */
+    /** "annemi", "ahmet'i", "ayşeye" → rehberdeki en uygun kişi(ler). */
     fun find(query: String): List<Contact> {
-        val variants = variants(FileTools.norm(query))
+        val variants = Nlu.nameVariants(query)
         if (variants.isEmpty()) return emptyList()
         var best = 0
         val hits = mutableListOf<Contact>()
         for (c in load()) {
             val n = FileTools.norm(c.name)
             val first = n.split(" ").firstOrNull() ?: ""
-            val score = variants.maxOf { q ->
-                when {
+            var score = 0
+            variants.forEachIndexed { vi, q ->
+                // Eki atılmış biçimlerde sadece tam ad / ilk ad eşleşmesi (yanlış kişiyi aramamak için)
+                val sc = when {
                     n == q -> 100
                     first == q -> 85
                     n.startsWith("$q ") -> 80
-                    q.length >= 3 && n.contains(q) -> 50
+                    vi == 0 && q.length >= 3 && n.contains(q) -> 50
                     else -> 0
-                }
+                } - vi * 3
+                if (sc > score) score = sc
             }
-            if (score == 0) continue
+            if (score <= 0) continue
             if (score > best) { best = score; hits.clear() }
             if (score == best) hits.add(c)
         }
         return hits
     }
 
-    private fun variants(q: String): List<String> {
-        val words = q.split(" ").filter { it.isNotEmpty() }.toMutableList()
-        // "ahmet i ara" gibi kesme işaretinden kalan ekleri at
-        while (words.size > 1 && words.last().length <= 3 && words.last() in SUFFIXES) words.removeAt(words.size - 1)
-        val base = words.joinToString(" ")
-        if (base.isEmpty()) return emptyList()
-        val out = linkedSetOf(base)
-        for (s in SUFFIXES.sortedByDescending { it.length }) {
-            if (base.endsWith(s) && base.length - s.length >= 3) out.add(base.removeSuffix(s))
+    /** Aramadan önce 3 saniyelik iptal süresi verir (yanlış anlaşılmaya karşı). */
+    fun call(c: Contact): String {
+        val uri = Uri.fromParts("tel", c.number, null)
+        if (!hasCall()) {
+            activity.onMain { activity.startActivity(Intent(Intent.ACTION_DIAL, uri)) }
+            return "📞 ${c.name} numarası açıldı, aramak için yeşil tuşa bas. (Doğrudan araması için \"arama\" iznini ver.)"
         }
-        return out.toList()
+        activity.onMain {
+            var cancelled = false
+            val d = AlertDialog.Builder(activity)
+                .setTitle("📞 ${c.name}")
+                .setMessage("${c.number}\n\n3 saniye içinde aranacak…")
+                .setNegativeButton("İptal") { _, _ -> cancelled = true }
+                .setOnCancelListener { cancelled = true }
+                .show()
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!cancelled && !activity.isFinishing) {
+                    try { d.dismiss() } catch (ignored: Exception) {}
+                    try { activity.startActivity(Intent(Intent.ACTION_CALL, uri)) } catch (ignored: Exception) {}
+                }
+            }, 3000)
+        }
+        return "📞 ${c.name} 3 saniye içinde aranacak (ekrandan iptal edebilirsin)."
     }
 
-    fun call(c: Contact): String {
-        return if (hasCall()) {
-            activity.onMain { activity.startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:${c.number}"))) }
-            "📞 ${c.name} aranıyor…"
-        } else {
-            activity.onMain { activity.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${c.number}"))) }
-            "📞 ${c.name} numarası açıldı, aramak için yeşil tuşa bas. (Doğrudan araması için \"arama\" iznini ver.)"
+    /** WhatsApp sohbetini mesaj yazılı halde açar; göndermek için gönder tuşuna basılır. */
+    fun whatsapp(c: Contact, body: String): String {
+        Guard.blockedReason(activity, WHATSAPP, "WhatsApp")?.let { return it }
+        var d = c.number.filter { it.isDigit() }
+        when {
+            c.number.trim().startsWith("+") -> {}
+            d.startsWith("00") -> d = d.drop(2)
+            d.startsWith("0") && d.length == 11 -> d = "9$d"
+            d.length == 10 && d.startsWith("5") -> d = "90$d"
+        }
+        val url = "https://wa.me/$d" + if (body.isNotBlank()) "?text=" + java.net.URLEncoder.encode(body, "UTF-8") else ""
+        val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(WHATSAPP)
+        return try {
+            AppLock.allow(activity, WHATSAPP)
+            activity.onMain { activity.startActivity(i) }
+            "💬 ${c.name} için WhatsApp açıldı" + (if (body.isNotBlank()) ": \"$body\". Göndermek için gönder tuşuna bas." else ".")
+        } catch (e: Exception) {
+            "WhatsApp açılamadı (yüklü olmayabilir)."
         }
     }
 
@@ -167,8 +195,6 @@ class ContactTools(private val activity: Activity) {
 
     companion object {
         const val REQ_CONTACTS = 45
-        private val SUFFIXES = setOf(
-            "i", "u", "yi", "yu", "e", "a", "ye", "ya", "ni", "nu", "ne", "na", "in", "un", "nin", "nun", "le", "la", "yle", "yla"
-        )
+        private const val WHATSAPP = "com.whatsapp"
     }
 }

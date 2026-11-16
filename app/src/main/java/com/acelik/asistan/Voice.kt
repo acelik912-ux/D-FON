@@ -57,7 +57,7 @@ object Voice {
      */
     fun wakeCommand(said: String): String? {
         val words = said.trim().split(Regex("\\s+"))
-        val n = words.map { FileTools.norm(it).replace(" ", "") }
+        val n = words.map { Nlu.norm(it).replace(" ", "") }
         for (i in n.indices) {
             if (n[i] !in FON_WORDS && !n[i].endsWith("fon")) continue
             // "fon"dan önceki kısım: "bir iki üç" / "1 2 3" / "123" / "birikiüç"

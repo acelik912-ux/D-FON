@@ -93,12 +93,21 @@ class MainActivity : Activity() {
         phone = PhoneTools(this)
         files = FileTools(this)
         engine = CommandEngine(phone, files, ClockTools(this), this, ContactTools(this))
+        engine.onUi = { what ->
+            runOnUiThread {
+                when (what) {
+                    "kible" -> PrayerExtras.qibla(this)
+                    "imsakiye" -> PrayerExtras.monthly(this)
+                }
+            }
+        }
+        Reminders.schedule(this)
         window.statusBarColor = BG
         window.navigationBarColor = BG
         setContentView(buildUi())
 
         addBubble(
-            "Merhaba! Ben D-FON. Tamamen telefonunda çalışırım: internete bağlanmam, ücret istemem, " +
+            "Merhaba! Ben D-FON (sürüm ${Diag.version(this)}). Tamamen telefonunda çalışırım: internete bağlanmam, ücret istemem, " +
                 "kimseye veri göndermem.\n\nYaz ya da ortadaki büyük 🎤'ya dokunup söyle. Ne yapabildiğimi görmek için \"yardım\" yaz.",
             Who.BOT
         )
@@ -147,6 +156,7 @@ class MainActivity : Activity() {
         if (WakeService.isEnabled(this) && micGranted()) WakeService.start(this)
         updateWakeChip()
         Prayer.recover(this)
+        if (::resultLine.isInitialized) PrayerExtras.maybeRefreshLocation(this)?.let { showResult(it) }
         if (::prayerRow.isInitialized) refreshPrayerCard()
         if (::sectionsBox.isInitialized) {
             refreshSections()
@@ -346,14 +356,18 @@ class MainActivity : Activity() {
             tile("❓", "Yardım") { submit("Yardım", true) },
             tile("🕘", "Geçmiş") { showHistory() },
             wakeChip,
+            voiceReplyTile,
+            tile("📝", "Notlarım") { submit("Notlarım", true) },
+            tile("⏰", "Hatırlatıcılar") { Reminders.show(this) { showResult(it) } },
+            tile("🎓", "Öğret") { Aliases.show(this, engine.lastUnknown) { showResult(it) } },
+            tile("🔑", "Kilit şifresi") { Guard.setup(this) { showResult(it); refreshSections() } },
             tile("✅", "İzinli uygulamalar") { showAppPicker() },
             tile("🔐", "İzinler") { showPermissions() },
-            tile("📝", "Notlarım") { submit("Notlarım", true) },
             tile("🎨", "Widget teması") { showWidgetStyle() },
             tile("🖼", "Telefon teması") { PhoneThemes.show(this) { refreshSections() } },
             tile("🧩", "Temalı simgeleri kaydet") { exportIcons() },
-            tile("🏠", "D-FON ana ekran") { homeSetup() },
-            voiceReplyTile,
+            tile("💾", "Yedekle") { Backup.menu(this) },
+            tile("🩺", "Tanılama") { Diag.show(this) },
             tile("🧹", "Sohbeti temizle") { clearChat() },
         )))
         return ScrollView(this).apply { addView(col) }
@@ -486,7 +500,12 @@ class MainActivity : Activity() {
     /** Uygulama düğmesi: simgesiz, sadece adı. */
     private fun appTile(app: FileTools.App) = TextView(this).apply {
         val locked = AppLock.isLocked(this@MainActivity, app.pkg)
-        text = if (locked) "🔒\n${app.label}" else app.label
+        val left = if (locked) Guard.remainingText(this@MainActivity, app.pkg) else null
+        text = when {
+            left != null -> "🔒 ${app.label}\n⏳ $left"
+            locked -> "🔒\n${app.label}"
+            else -> app.label
+        }
         gravity = Gravity.CENTER
         textSize = 12.5f
         setTypeface(typeface, Typeface.BOLD)
@@ -495,7 +514,62 @@ class MainActivity : Activity() {
         ellipsize = TextUtils.TruncateAt.END
         background = LedStyle.FrameDrawable(this@MainActivity, 14f, if (locked) LOCKED_BG else APP_BG)
         setPadding(dp(4), dp(6), dp(4), dp(6))
-        setOnClickListener { showResult(files.openApp(app)) }
+        setOnClickListener { openGuarded(app) }
+    }
+
+    /** Kilitli uygulamayı açmadan önce süre sınırına ve şifreye bakar. */
+    private fun openGuarded(app: FileTools.App) {
+        if (!AppLock.isLocked(this, app.pkg)) {
+            showResult(files.openApp(app))
+            return
+        }
+        if (Guard.limit(this, app.pkg) > 0 && Guard.remainingMs(this, app.pkg) <= 0) {
+            AlertDialog.Builder(this)
+                .setTitle("⏳ ${app.label}")
+                .setMessage("Bugünkü süre (${Guard.limit(this, app.pkg)} dk) doldu. Yarın yenilenir.")
+                .setPositiveButton("Tamam", null)
+                .setNeutralButton("15 dk ekle (şifreyle)") { _, _ ->
+                    if (!Guard.hasPin(this)) {
+                        showResult("Süre eklemek için önce D-FON bölümünden 🔑 Kilit şifresi belirle.")
+                    } else {
+                        Guard.ask(this, "${app.label}: 15 dk ekle", force = true) {
+                            Guard.addBonus(this, app.pkg, 15)
+                            refreshSections()
+                            showResult(files.openApp(app))
+                        }
+                    }
+                }
+                .show()
+            return
+        }
+        Guard.ask(this, app.label) { showResult(files.openApp(app)) }
+    }
+
+    private fun limitDialog(pkg: String) {
+        val name = appLabel(pkg)
+        val options = listOf(0, 15, 30, 45, 60, 90, 120)
+        val labels = options.map { if (it == 0) "Sınır yok" else "Günde $it dakika" }.toTypedArray()
+        Guard.ask(this, "$name: süre sınırı", force = true) {
+            AlertDialog.Builder(this)
+                .setTitle("⏳ $name için günlük süre")
+                .setSingleChoiceItems(labels, options.indexOf(Guard.limit(this, pkg)).coerceAtLeast(0)) { d, w ->
+                    Guard.setLimit(this, pkg, options[w])
+                    d.dismiss()
+                    if (options[w] > 0 && !AppLock.isLocked(this, pkg)) AppLock.setLocked(this, pkg, true)
+                    refreshSections()
+                    val msg = StringBuilder(
+                        if (options[w] == 0) "⏳ $name için süre sınırı kaldırıldı."
+                        else "⏳ $name günde ${options[w]} dakika açık kalabilir; süre dolunca kapanır ve ertesi gün yenilenir. " +
+                            "Uygulama kilitli olduğu için sadece D-FON'dan açılır."
+                    )
+                    if (options[w] > 0 && !Guard.hasPin(this)) {
+                        msg.append("\n\n⚠ Kilit şifresi yok: sınırı herkes değiştirebilir. D-FON bölümünden 🔑 Kilit şifresi belirle.")
+                    }
+                    if (options[w] > 0 && !AppLock.serviceEnabled(this)) lockSetupDialog() else showResult(msg.toString())
+                }
+                .setNegativeButton("Vazgeç", null)
+                .show()
+        }
     }
 
     private fun itemMenu(si: Int, ii: Int) {
@@ -510,12 +584,17 @@ class MainActivity : Activity() {
         if (pkg != null) {
             opts += (if (AppLock.isLocked(this, pkg)) "🔓 Kilidi kaldır (her yerden açılsın)"
             else "🔒 Sadece D-FON'dan açılsın") to { toggleLock(pkg) }
+            opts += "⏳ Günlük süre sınırı" to { limitDialog(pkg) }
         }
         opts += "🗑 Butonu kaldır" to {
-            sec.items.removeAt(ii)
-            saveLayout()
-            if (pkg != null) unlockIfOrphan(pkg)
-            refreshSections()
+            val remove = {
+                sec.items.removeAt(ii)
+                saveLayout()
+                if (pkg != null) unlockIfOrphan(pkg)
+                refreshSections()
+            }
+            if (pkg != null && AppLock.isLocked(this, pkg)) Guard.ask(this, "$name: düğmeyi kaldır", force = true) { remove() }
+            else remove()
         }
         AlertDialog.Builder(this)
             .setTitle(name)
@@ -716,9 +795,12 @@ class MainActivity : Activity() {
     private fun toggleLock(pkg: String) {
         val name = appLabel(pkg)
         if (AppLock.isLocked(this, pkg)) {
-            AppLock.setLocked(this, pkg, false)
-            refreshSections()
-            showResult("🔓 $name artık her yerden açılabilir.")
+            Guard.ask(this, "$name: kilidi kaldır", force = true) {
+                AppLock.setLocked(this, pkg, false)
+                Guard.setLimit(this, pkg, 0)
+                refreshSections()
+                showResult("🔓 $name artık her yerden açılabilir.")
+            }
             return
         }
         AppLock.setLocked(this, pkg, true)
@@ -754,6 +836,7 @@ class MainActivity : Activity() {
         val stillThere = layout.any { s -> s.items.any { it.pkg == pkg } }
         if (!stillThere && AppLock.isLocked(this, pkg)) {
             AppLock.setLocked(this, pkg, false)
+            Guard.setLimit(this, pkg, 0)
             showResult("🔓 ${appLabel(pkg)} düğmesi kaldırıldığı için kilidi de kaldırıldı.")
         }
     }
@@ -824,6 +907,22 @@ class MainActivity : Activity() {
             setPadding(dp(2), dp(10), dp(2), dp(2))
             setOnClickListener { showWidgetStyle() }
         })
+        val more = LinearLayout(this).apply { setPadding(0, dp(8), 0, 0) }
+        fun link(t: String, onClick: () -> Unit) = TextView(this).apply {
+            text = t
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            setTextColor(Color.WHITE)
+            background = rounded(PRAYER_BTN, 12)
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+            setOnClickListener { onClick() }
+        }
+        more.addView(link("🧭 Kıble") { PrayerExtras.qibla(this) }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(0, 0, dp(4), 0) })
+        more.addView(link("🗓 30 gün") { PrayerExtras.monthly(this) }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+        more.addView(link("🛠 İnce ayar") {
+            PrayerExtras.advanced(this) { refreshPrayerCard(); showResult("Kaydedildi.\n\n" + Prayer.todayText(this)) }
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(4), 0, 0, 0) })
+        card.addView(more, LinearLayout.LayoutParams(-1, -2))
         refreshPrayerCard()
         return card
     }
@@ -883,28 +982,6 @@ class MainActivity : Activity() {
                 }
                 dlg.show()
             }
-    }
-
-    /** D-FON'u telefonun ana ekranı yapma: simgeler ve widget'lar temalı çerçeveyle görünür. */
-    private fun homeSetup() {
-        AlertDialog.Builder(this)
-            .setTitle("🏠 D-FON ana ekran")
-            .setMessage(
-                "D-FON'u telefonun ana ekranı yaparsan bütün uygulama simgeleri ve widget'lar altın çizgili, altında LED " +
-                    "parlayan çerçeveyle görünür.\n\n" +
-                    "1. Açılan ekranda \"Ana ekran uygulaması\"nı (Varsayılan uygulamalar → Ana ekran) \"D-FON Ana Ekran\" yap.\n" +
-                    "2. Ana ekranda boş bir yere basılı tut: widget ekle, tema seç, düzenle.\n" +
-                    "3. Alttaki \"⋯ Tümü\" tüm uygulamaları açar; bir simgeye basılı tutarak ana ekrana ya da alt çubuğa eklersin.\n\n" +
-                    "Eski Samsung ana ekranına dönmek istersen aynı yerden \"One UI Home\"u seçmen yeterli."
-            )
-            .setPositiveButton("Ana ekran ayarını aç") { _, _ ->
-                try { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) } catch (e: Exception) {
-                    try { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } catch (ignored: Exception) {}
-                }
-            }
-            .setNeutralButton("Önizle") { _, _ -> startActivity(Intent(this, HomeActivity::class.java)) }
-            .setNegativeButton("Kapat", null)
-            .show()
     }
 
     /** Widget teması ve yazı büyüklüğü seçimi, canlı önizlemeli. */
@@ -1777,6 +1854,10 @@ class MainActivity : Activity() {
         if (requestCode == REQ_VOICE && resultCode == RESULT_OK) {
             val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!said.isNullOrBlank()) submit(said, voice = true)
+        }
+        Backup.onResult(this, requestCode, if (resultCode == RESULT_OK) data?.data else null)?.let {
+            if (!isFinishing) showResult(it)
+            return
         }
         if (requestCode == FileTools.REQ_PICK) {
             val picked = if (resultCode == RESULT_OK) files.handlePick(data) else emptyList()

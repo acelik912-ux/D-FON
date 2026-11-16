@@ -94,6 +94,7 @@ class FileTools(private val activity: Activity) {
     }
 
     fun openApp(app: App): String {
+        Guard.blockedReason(activity, app.pkg, app.label)?.let { return it }
         val i = pm.getLaunchIntentForPackage(app.pkg) ?: return "${app.label} açılamadı."
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         AppLock.allow(activity, app.pkg)
@@ -586,11 +587,6 @@ class FileTools(private val activity: Activity) {
                 "</Relationships>"
 
         /** Türkçe karakterleri sadeleştirip küçük harfe çevirir (eşleştirme için). */
-        fun norm(s: String): String = s.lowercase(Locale("tr"))
-            .replace('ı', 'i').replace('ş', 's').replace('ç', 'c')
-            .replace('ğ', 'g').replace('ö', 'o').replace('ü', 'u').replace('â', 'a').replace('î', 'i')
-            .replace(Regex("[^a-z0-9% ]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+        fun norm(s: String): String = Nlu.norm(s)
     }
 }

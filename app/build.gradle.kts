@@ -43,6 +43,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions { unitTests.isReturnDefaultValues = true }
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -51,4 +52,5 @@ android {
 dependencies {
     // PDF'ten yazı çıkarma ve PDF birleştirme (açık kaynak, telefonda çalışır)
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    testImplementation("junit:junit:4.13.2")
 }
