@@ -364,7 +364,7 @@ object Prayer {
             p.edit()
                 .putBoolean("biz_aldik", true)
                 .putInt("yeniden", 0)
-                .putInt("bizim_mod", audio.ringerMode)
+                .putInt("bizim_mod", target)
                 .putLong("geri_al", until)
                 .apply()
             setAlarm(c, until, pi(c, ACTION_RESTORE, 2))
@@ -385,11 +385,11 @@ object Prayer {
         val p = prefs(c)
         if (!p.getBoolean("biz_aldik", false)) return
         val now = System.currentTimeMillis()
-        if (now >= p.getLong("geri_al", 0)) return
+        if (now >= p.getLong("geri_al", 0)) { restore(c); return }
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val want = p.getInt("bizim_mod", -1)
         val tries = p.getInt("yeniden", 0)
-        if (want == -1 || audio.ringerMode == want || tries >= 4) return
+        if (want == -1 || audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || tries >= 4) return
         p.edit().putInt("yeniden", tries + 1).apply()
         try {
             audio.ringerMode = want
@@ -403,10 +403,26 @@ object Prayer {
         val p = prefs(c)
         if (!p.getBoolean("biz_aldik", false)) return
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val cur = audio.ringerMode
+        val ours = p.getInt("bizim_mod", -1)
+        var msg: String
         // Kullanıcı bu arada modu kendisi değiştirdiyse ona dokunma
-        if (audio.ringerMode == p.getInt("bizim_mod", -1)) {
-            try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (ignored: Exception) {}
+        if (cur == AudioManager.RINGER_MODE_NORMAL) {
+            msg = "Telefon zaten sesliydi."
+        } else if (cur == ours || ours == -1) {
+            try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (e: Exception) { Diag.log(c, "namaz", "geri alma hatası: ${e.message}") }
+            if (audio.ringerMode != AudioManager.RINGER_MODE_NORMAL) {
+                // Samsung bazen ilk denemeyi yutuyor: sesi açma tuşu gibi dene
+                try { audio.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, 0) } catch (ignored: Exception) {}
+                try { audio.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_RAISE, 0) } catch (ignored: Exception) {}
+                try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (ignored: Exception) {}
+            }
+            msg = if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) "Telefon tekrar sesli yapıldı."
+            else "Sesli yapılamadı (mod ${audio.ringerMode})."
+        } else {
+            msg = "Telefonun modunu sen değiştirmişsin, dokunmadım."
         }
+        log(c, "Süre doldu: $msg")
         p.edit().remove("biz_aldik").remove("bizim_mod").remove("geri_al").apply()
         (c.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi(c, ACTION_RESTORE, 2))
         (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
