@@ -330,6 +330,19 @@ object Prayer {
         else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, p)
     }
 
+    /** Geri alma için: setAlarmClock hem tam zamanlıdır hem de Doze/izin durumundan etkilenmez. */
+    private fun setRestoreAlarm(c: Context, at: Long) {
+        val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val show = PendingIntent.getActivity(
+            c, 3, Intent(c, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        try {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(at, show), pi(c, ACTION_RESTORE, 2))
+        } catch (e: Exception) {
+            setAlarm(c, at, pi(c, ACTION_RESTORE, 2))
+        }
+    }
+
     private fun cancelSilenceAlarm(c: Context) {
         val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         am.cancel(pi(c, ACTION_SILENCE, 1))
@@ -367,7 +380,7 @@ object Prayer {
                 .putInt("bizim_mod", target)
                 .putLong("geri_al", until)
                 .apply()
-            setAlarm(c, until, pi(c, ACTION_RESTORE, 2))
+            setRestoreAlarm(c, until)
             notify(
                 c,
                 "🕌 $name vakti",
@@ -433,7 +446,7 @@ object Prayer {
         val p = prefs(c)
         if (p.getBoolean("biz_aldik", false)) {
             val at = p.getLong("geri_al", 0)
-            if (at <= System.currentTimeMillis()) restore(c) else setAlarm(c, at, pi(c, ACTION_RESTORE, 2))
+            if (at <= System.currentTimeMillis()) restore(c) else setRestoreAlarm(c, at)
         }
         checkMissed(c)
         schedule(c)
