@@ -366,6 +366,12 @@ object Prayer {
         // Kullanıcı zaten sessiz/titreşimdeyse dokunma
         if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
             var target = if (mode(c) == "titresim") AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_SILENT
+            // Zil sesi seviyesini sakla: bazı telefonlar (Samsung) titreşim/sessizde seviyeyi 0'a çeker,
+            // sesliye dönünce seviye 0 kalırsa telefon yine titreşimde/sessiz kalır.
+            try {
+                val rv = audio.getStreamVolume(AudioManager.STREAM_RING)
+                if (rv > 0) p.edit().putInt("zil_ses", rv).apply()
+            } catch (ignored: Exception) {}
             try {
                 audio.ringerMode = target
             } catch (e: SecurityException) {
@@ -393,10 +399,25 @@ object Prayer {
         return "Telefon zaten sessiz ya da titreşimde olduğu için dokunmadım. Önce sesli yapıp tekrar dene."
     }
 
-    /** Sesliye almak için sırayla birkaç yol dener. */
+    /** Zil sesi seviyesini sakladığımız değere (yoksa %70'e) getirir; 0 kalırsa telefon yine titreşimde sayılır. */
+    private fun ensureRingVolume(c: Context, audio: AudioManager) {
+        try {
+            val max = audio.getStreamMaxVolume(AudioManager.STREAM_RING)
+            val saved = prefs(c).getInt("zil_ses", 0)
+            val want = (if (saved in 1..max) saved else (max * 0.7).toInt()).coerceIn(1, max)
+            if (audio.getStreamVolume(AudioManager.STREAM_RING) < want)
+                audio.setStreamVolume(AudioManager.STREAM_RING, want, 0)
+        } catch (e: Exception) { Diag.log(c, "namaz", "zil sesi ayarlanamadı: ${e.message}") }
+    }
+
+    /** Sesliye almak için sırayla birkaç yol dener. Başarı: mod NORMAL ve zil sesi 0'dan büyük. */
     private fun forceNormal(c: Context, audio: AudioManager): Boolean {
-        fun ok() = audio.ringerMode == AudioManager.RINGER_MODE_NORMAL
+        fun ok() = audio.ringerMode == AudioManager.RINGER_MODE_NORMAL &&
+            (try { audio.getStreamVolume(AudioManager.STREAM_RING) > 0 } catch (e: Exception) { true })
         try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (e: Exception) { Diag.log(c, "namaz", "geri alma hatası: ${e.message}") }
+        ensureRingVolume(c, audio)
+        // Seviye 0'dan yükselince bazı telefonlar kendiliğinden sesliye döner; modu bir kez daha ver
+        try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (ignored: Exception) {}
         if (ok()) return true
         // Rahatsız Etmeyin açıksa modu geri vermeyebilir
         try {
@@ -405,16 +426,30 @@ object Prayer {
                 nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
         } catch (ignored: Exception) {}
         try { audio.ringerMode = AudioManager.RINGER_MODE_NORMAL } catch (ignored: Exception) {}
+        ensureRingVolume(c, audio)
         if (ok()) return true
         // Ses açma tuşu gibi: titreşimden sesliye geçişe bu bayrak gerekir
         try { audio.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_ALLOW_RINGER_MODES) } catch (ignored: Exception) {}
         try { audio.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_RAISE, AudioManager.FLAG_ALLOW_RINGER_MODES) } catch (ignored: Exception) {}
+        ensureRingVolume(c, audio)
         if (ok()) return true
         try {
             val max = audio.getStreamMaxVolume(AudioManager.STREAM_RING)
             audio.setStreamVolume(AudioManager.STREAM_RING, (max * 0.7).toInt().coerceAtLeast(1), AudioManager.FLAG_ALLOW_RINGER_MODES)
         } catch (ignored: Exception) {}
         return ok()
+    }
+
+    /** Geri alındıktan birkaç sn sonra hâlâ sesli mi diye bakar; değilse tekrar dener. */
+    private fun verifyLater(c: Context) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val vol = try { audio.getStreamVolume(AudioManager.STREAM_RING) } catch (e: Exception) { 1 }
+            if (audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || vol <= 0) {
+                log(c, "Sesli yapıldıktan sonra telefon tekrar titreşime/sessize düştü (mod ${audio.ringerMode}, seviye $vol); tekrar deniyorum.")
+                retryNormal(c, 1)
+            }
+        }, 4000L)
     }
 
     private fun retryNormal(c: Context, n: Int) {
@@ -456,6 +491,7 @@ object Prayer {
             msg = "Telefon zaten sesliydi."
         } else if (cur == ours || ours == -1) {
             val ok = forceNormal(c, audio)
+            if (ok) verifyLater(c)
             msg = if (ok) "Telefon tekrar sesli yapıldı."
             else "Sesli yapılamadı (mod ${audio.ringerMode}); birkaç saniye sonra tekrar deneyeceğim."
             if (!ok) {
@@ -474,7 +510,7 @@ object Prayer {
             msg = "Telefonun modunu sen değiştirmişsin, dokunmadım."
         }
         log(c, "Süre doldu: $msg")
-        p.edit().remove("biz_aldik").remove("bizim_mod").remove("geri_al").remove("geri_deneme").apply()
+        p.edit().remove("biz_aldik").remove("bizim_mod").remove("geri_al").remove("geri_deneme").remove("zil_ses").apply()
         (c.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(pi(c, ACTION_RESTORE, 2))
         (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
     }
