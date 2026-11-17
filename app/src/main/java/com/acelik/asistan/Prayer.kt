@@ -402,11 +402,11 @@ object Prayer {
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val want = p.getInt("bizim_mod", -1)
         val tries = p.getInt("yeniden", 0)
-        if (want == -1 || audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || tries >= 4) return
+        if (want == -1 || audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || tries >= 15) return
         p.edit().putInt("yeniden", tries + 1).apply()
         try {
             audio.ringerMode = want
-            log(c, "Süre içinde telefon sesliye dönmüştü; tekrar ${if (want == AudioManager.RINGER_MODE_VIBRATE) "titreşime" else "sessize"} aldım (${tries + 1}).")
+            log(c, "${fmt(now)}: telefon sesliye dönmüştü; tekrar ${if (want == AudioManager.RINGER_MODE_VIBRATE) "titreşime" else "sessize"} aldım (${tries + 1}/15).")
         } catch (e: Exception) {
             log(c, "Süre içinde sesliye dönüldü, tekrar alınamadı: ${e.message}")
         }
