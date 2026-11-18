@@ -498,7 +498,8 @@ object Prayer {
         // Kullanıcı bu arada modu kendisi değiştirdiyse ona dokunma
         if (cur == AudioManager.RINGER_MODE_NORMAL) {
             msg = "Telefon zaten sesliydi."
-        } else if (cur == ours || ours == -1) {
+        } else if (cur == AudioManager.RINGER_MODE_VIBRATE || cur == AudioManager.RINGER_MODE_SILENT) {
+            // Sessiz/titreşim hangisi olursa olsun süre dolunca sesliye al (Samsung sessizi titreşime çevirebiliyor)
             val ok = forceNormal(c, audio)
             if (ok) verifyLater(c)
             msg = if (ok) "Telefon tekrar sesli yapıldı."
