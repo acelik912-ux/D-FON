@@ -186,9 +186,9 @@ class FileTools(private val activity: Activity) {
 
     private fun launchWithAllowed(i: Intent, app: App?, ok: String): String {
         val allowed = allowedPackages()
-        val handlers = pm.queryIntentActivities(i, 0)
-            .filter { it.activityInfo.packageName in allowed }
-            .distinctBy { it.activityInfo.packageName }
+        val all = pm.queryIntentActivities(i, 0).distinctBy { it.activityInfo.packageName }
+        // İzinli uygulamalar arasında uygun olan yoksa, dosyanın açılabilmesi için diğer uygun uygulamaları göster
+        val handlers = all.filter { it.activityInfo.packageName in allowed }.ifEmpty { all }
         if (app != null) {
             if (handlers.none { it.activityInfo.packageName == app.pkg }) {
                 return "${app.label} bu dosyayla çalışamıyor ya da izinli değil."

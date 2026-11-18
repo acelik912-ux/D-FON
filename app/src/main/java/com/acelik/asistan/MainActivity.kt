@@ -300,6 +300,38 @@ class MainActivity : Activity() {
         if (!on) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
+    /** Seçilen dosyalar için tek dokunuşluk işlem listesi: aç, oku, çevir, paylaş. */
+    private fun showFileActions(nos: List<Int>) {
+        val kinds = nos.map { files.kind(it) }
+        val first = nos.first()
+        val items = ArrayList<Pair<String, () -> List<String>>>()
+        items.add("📂 Aç" to { listOf(files.openFile(first, null)) })
+        if (kinds.any { it == "pdf" || it == "word" || it == "metin" })
+            items.add("🔊 Sesli oku" to { listOf(files.readAloud(nos[kinds.indexOfFirst { it == "pdf" || it == "word" || it == "metin" }])) })
+        if (kinds.any { it == "resim" || it == "word" || it == "metin" }) {
+            val ok = nos.filterIndexed { i, _ -> kinds[i] in listOf("resim", "word", "metin") }
+            items.add("📄 PDF yap" to { listOf(files.filesToPdf(ok)) })
+        }
+        kinds.indexOf("pdf").let { i ->
+            if (i >= 0) {
+                items.add("📝 Word'e çevir (PDF → .docx)" to { listOf(files.pdfToDocx(nos[i])) })
+                items.add("🖼️ PDF'i resimlere çevir" to { listOf(files.pdfToImages(nos[i])) })
+            }
+        }
+        val pdfs = nos.filterIndexed { i, _ -> kinds[i] == "pdf" }
+        if (pdfs.size >= 2) items.add("➕ PDF'leri birleştir" to { listOf(files.mergePdfs(pdfs)) })
+        items.add("📤 Paylaş" to { listOf(files.shareFile(first, null)) })
+        val title = if (nos.size == 1) files.name(first) else "${nos.size} dosya seçildi"
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(items.map { it.first }.toTypedArray()) { _, which ->
+                val job = items[which].second
+                runInBackground({ job() })
+            }
+            .setNegativeButton("Kapat", null)
+            .show()
+    }
+
     private fun showResult(text: String) {
         resultLine.text = text
         resultLine.visibility = View.VISIBLE
@@ -1861,7 +1893,12 @@ class MainActivity : Activity() {
         }
         if (requestCode == FileTools.REQ_PICK) {
             val picked = if (resultCode == RESULT_OK) files.handlePick(data) else emptyList()
-            runInBackground({ engine.onFilesPicked(picked) })
+            var fresh = false
+            runInBackground({
+                val r = engine.onFilesPicked(picked)
+                fresh = picked.isNotEmpty() && r.firstOrNull()?.startsWith("📎 Eklendi") == true
+                r
+            }, { if (fresh && !isFinishing) showFileActions(picked) })
         }
     }
 
