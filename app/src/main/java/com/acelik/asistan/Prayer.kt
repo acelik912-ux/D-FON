@@ -471,6 +471,15 @@ object Prayer {
         val tries = p.getInt("yeniden", 0)
         if (want == -1 || audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || tries >= 15) return
         p.edit().putInt("yeniden", tries + 1).apply()
+        // Tanılama: neyin çevirdiğini anlamak için o andaki durumu yaz
+        try {
+            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val pm = c.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            log(c, "${fmt(now)}: sesliye dönüş algılandı — zil seviyesi ${audio.getStreamVolume(AudioManager.STREAM_RING)}, " +
+                "RE filtresi ${nm.currentInterruptionFilter}, ekran ${if (pm.isInteractive) "açık" else "kapalı"}, " +
+                "son tekrar ${(now - p.getLong("son_yeniden", 0)) / 1000} sn önce.")
+            p.edit().putLong("son_yeniden", now).apply()
+        } catch (ignored: Exception) {}
         try {
             audio.ringerMode = want
             log(c, "${fmt(now)}: telefon sesliye dönmüştü; tekrar ${if (want == AudioManager.RINGER_MODE_VIBRATE) "titreşime" else "sessize"} aldım (${tries + 1}/15).")
