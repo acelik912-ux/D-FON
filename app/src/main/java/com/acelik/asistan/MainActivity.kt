@@ -266,6 +266,12 @@ class MainActivity : Activity() {
             background = rounded(CHIP, 24)
             setOnClickListener { if (!busy) files.pick("hepsi", true) }
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { setMargins(0, 0, dp(4), 0) })
+        bar.addView(Button(this).apply {
+            text = "✍️"
+            textSize = 18f
+            background = rounded(CHIP, 24)
+            setOnClickListener { if (!busy) showDocEditor(null, "") }
+        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { setMargins(0, 0, dp(2), 0) })
         input = EditText(this).apply {
             hint = "Ne yapayım?"
             setHintTextColor(0xFF8A94A6.toInt())
@@ -300,6 +306,71 @@ class MainActivity : Activity() {
         if (!on) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
+    /** Belge yazma/düzenleme ekranı: yaz, dilekçe şablonu ekle, PDF ya da Word olarak kaydet. */
+    private fun showDocEditor(text: String?, name: String) {
+        val sp = getSharedPreferences("dfon", MODE_PRIVATE)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(8), dp(14), dp(4))
+        }
+        val title = EditText(this).apply {
+            hint = "Belge adı (örn. Dilekçe)"
+            setText(if (name.isNotBlank()) name else sp.getString("taslak_ad", "Belge"))
+            setSingleLine(true)
+        }
+        val body = EditText(this).apply {
+            hint = "Buraya yaz. Dilekçe için aşağıdaki şablon düğmesini kullan."
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            gravity = Gravity.TOP or Gravity.START
+            minLines = 12
+            setText(text ?: sp.getString("taslak", "") ?: "")
+        }
+        fun save(kind: String) {
+            val t = body.text.toString()
+            if (t.isBlank()) { Toast.makeText(this, "Önce bir şeyler yaz.", Toast.LENGTH_SHORT).show(); return }
+            val n = title.text.toString().ifBlank { "Belge" }
+            sp.edit().putString("taslak", t).putString("taslak_ad", n).apply()
+            Toast.makeText(this, "Kaydediliyor; bitince sohbette yazar.", Toast.LENGTH_SHORT).show()
+            runInBackground({
+                listOf(if (kind == "pdf") files.textToPdf(t, n) else files.textToDocx(t, n))
+            })
+        }
+        fun row(vararg b: Pair<String, () -> Unit>) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            b.forEach { (label, act) ->
+                addView(Button(this@MainActivity).apply {
+                    this.text = label
+                    isAllCaps = false
+                    setOnClickListener { act() }
+                }, LinearLayout.LayoutParams(0, -2, 1f))
+            }
+        }
+        box.addView(title)
+        box.addView(ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        box.addView(row(
+            "📋 Dilekçe şablonu" to {
+                val d = java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale("tr")).format(java.util.Date())
+                val tpl = "…………… MAKAMINA\n\nKonu: ……………\n\n" +
+                    "……………………………………………………………………………………\n" +
+                    "……………………………………………………………………………………\n\n" +
+                    "Gereğini bilgilerinize arz ederim.\n\nTarih: $d\n\nAd Soyad: ……………\n" +
+                    "T.C. Kimlik No: ……………\nAdres: ……………\nTelefon: ……………\nİmza:\n"
+                body.setText(if (body.text.isBlank()) tpl else body.text.toString() + "\n\n" + tpl)
+                title.setText("Dilekçe")
+            },
+            "🔊 Oku" to { val t = body.text.toString(); if (t.isNotBlank()) Speaker.speak(this, t) }
+        ))
+        box.addView(row("📄 PDF kaydet" to { save("pdf") }, "📝 Word kaydet" to { save("docx") }))
+        AlertDialog.Builder(this)
+            .setTitle("✍️ Belge")
+            .setView(box)
+            .setNegativeButton("Kapat") { _, _ ->
+                sp.edit().putString("taslak", body.text.toString()).putString("taslak_ad", title.text.toString()).apply()
+            }
+            .show()
+    }
+
+
     /** Seçilen dosyalar için tek dokunuşluk işlem listesi: aç, oku, çevir, paylaş. */
     private fun showFileActions(nos: List<Int>) {
         val kinds = nos.map { files.kind(it) }
@@ -320,6 +391,14 @@ class MainActivity : Activity() {
         }
         val pdfs = nos.filterIndexed { i, _ -> kinds[i] == "pdf" }
         if (pdfs.size >= 2) items.add("➕ PDF'leri birleştir" to { listOf(files.mergePdfs(pdfs)) })
+        kinds.indexOfFirst { it == "pdf" || it == "word" || it == "metin" }.let { i ->
+            if (i >= 0) items.add("✏️ Yazıyı düzenle" to {
+                val t = files.textOf(nos[i])
+                val n = files.name(nos[i]).substringBeforeLast('.')
+                runOnUiThread { showDocEditor(t, n) }
+                emptyList<String>()
+            })
+        }
         items.add("📤 Paylaş" to { listOf(files.shareFile(first, null)) })
         val title = if (nos.size == 1) files.name(first) else "${nos.size} dosya seçildi"
         AlertDialog.Builder(this)

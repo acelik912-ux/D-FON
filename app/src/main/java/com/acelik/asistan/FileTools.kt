@@ -431,6 +431,17 @@ class FileTools(private val activity: Activity) {
         return "🔊 ${f.name} okunuyor. Durdurmak için \"dur\" yaz ya da söyle."
     }
 
+    /** Düzenleme için dosyanın yazısını verir (PDF, Word, metin). */
+    fun textOf(no: Int): String {
+        val f = file(no)
+        return when (kind(f)) {
+            "pdf" -> pdfText(f.uri)
+            "word" -> docxText(f.uri)
+            "metin" -> String(readBytes(f.uri), Charsets.UTF_8)
+            else -> throw IllegalArgumentException("${f.name} düzenlenebilen bir dosya değil (PDF, Word ya da metin olmalı).")
+        }
+    }
+
     fun speakText(text: String): String {
         if (!activity.onMain { Speaker.speak(activity, text) }) return "Okunacak yazı yok."
         return "🔊 Okuyorum. Durdurmak için \"dur\" de."
