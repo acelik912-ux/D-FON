@@ -123,6 +123,7 @@ class FileTools(private val activity: Activity) {
             "pdf" -> arrayOf("application/pdf")
             "word" -> arrayOf(DOCX_MIME)
             "resim" -> arrayOf("image/*")
+            "ses" -> arrayOf("audio/*")
             else -> arrayOf("*/*")
         }
         i.type = mimes[0]
@@ -292,6 +293,28 @@ class FileTools(private val activity: Activity) {
             }
         }
         return "${nos.size} PDF birleştirildi: İndirilenler/D-FON/$name"
+    }
+
+    /** Ses ya da video dosyasını MP3'e çevirir; Müzik/D-FON klasörüne kaydeder. */
+    fun toMp3(nos: List<Int>): String {
+        val done = ArrayList<String>(); val bad = ArrayList<String>()
+        for (no in nos) {
+            val f = file(no)
+            try {
+                val base = f.name.substringBeforeLast('.')
+                var sec = 0L
+                save(fileName(base, "mp3"), "audio/mpeg", Environment.DIRECTORY_MUSIC) { os ->
+                    sec = Mp3Converter.convert(activity, f.uri, java.io.BufferedOutputStream(os, 1 shl 16))
+                }
+                done.add("${f.name} (${sec / 60}:${"%02d".format(sec % 60)})")
+            } catch (e: Exception) {
+                bad.add("${f.name}: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
+        val sb = StringBuilder()
+        if (done.isNotEmpty()) sb.append("🎵 ${done.size} dosya MP3'e çevrildi → Müzik/D-FON klasörü:\n").append(done.joinToString("\n") { "• $it" })
+        if (bad.isNotEmpty()) sb.append(if (sb.isEmpty()) "" else "\n\n").append("Çevrilemeyenler:\n").append(bad.joinToString("\n") { "• $it" })
+        return sb.toString()
     }
 
     fun pdfToImages(no: Int): String {
@@ -509,8 +532,11 @@ class FileTools(private val activity: Activity) {
             put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/D-FON")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
-        val collection = if (folder == Environment.DIRECTORY_PICTURES)
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val collection = when (folder) {
+            Environment.DIRECTORY_PICTURES -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            Environment.DIRECTORY_MUSIC -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            else -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        }
         val uri = cr.insert(collection, cv) ?: throw IOException("Dosya oluşturulamadı")
         try {
             (cr.openOutputStream(uri) ?: throw IOException("Dosyaya yazılamadı")).use(write)
@@ -561,6 +587,8 @@ class FileTools(private val activity: Activity) {
         return when {
             f.mime == "application/pdf" || n.endsWith(".pdf") -> "pdf"
             f.mime.startsWith("image/") -> "resim"
+            f.mime.startsWith("audio/") -> "ses"
+            f.mime.startsWith("video/") -> "video"
             f.mime == DOCX_MIME || n.endsWith(".docx") -> "word"
             f.mime.startsWith("text/") || n.endsWith(".txt") || n.endsWith(".md") || n.endsWith(".csv") -> "metin"
             else -> "diger"

@@ -389,6 +389,11 @@ class MainActivity : Activity() {
                 items.add("🖼️ PDF'i resimlere çevir" to { listOf(files.pdfToImages(nos[i])) })
             }
         }
+        val media = nos.filterIndexed { i, _ -> kinds[i] == "ses" || kinds[i] == "video" }
+        if (media.isNotEmpty()) items.add(0, "🎵 MP3'e çevir" to {
+            runOnUiThread { Toast.makeText(this, "MP3'e çeviriyorum; uzun şarkılar 1-2 dk sürebilir.", Toast.LENGTH_LONG).show() }
+            listOf(files.toMp3(media))
+        })
         val pdfs = nos.filterIndexed { i, _ -> kinds[i] == "pdf" }
         if (pdfs.size >= 2) items.add("➕ PDF'leri birleştir" to { listOf(files.mergePdfs(pdfs)) })
         kinds.indexOfFirst { it == "pdf" || it == "word" || it == "metin" }.let { i ->
@@ -2153,6 +2158,7 @@ class MainActivity : Activity() {
                 Triple("🔉", "Medya %30", "Medya sesi 30"),
                 Triple("🔊", "Medya %70", "Medya sesi 70"),
                 Triple("🔇", "Sesi kapat", "Sesi kapat"),
+                Triple("🎵", "MP3'e çevir", "MP3'e çevir"),
                 Triple("⏰", "Alarmlar", "Alarmları göster"),
             ),
             "📱 Ekran ve bağlantı" to listOf(

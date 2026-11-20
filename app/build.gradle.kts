@@ -52,5 +52,7 @@ android {
 dependencies {
     // PDF'ten yazı çıkarma ve PDF birleştirme (açık kaynak, telefonda çalışır)
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    // MP3 kodlayıcı (LAME'in saf Java sürümü, LGPL; telefonda çalışır, internet gerekmez)
+    implementation("io.github.raphimc:jump3r:1.0.6")
     testImplementation("junit:junit:4.13.2")
 }

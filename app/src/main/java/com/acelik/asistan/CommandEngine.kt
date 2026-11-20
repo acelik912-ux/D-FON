@@ -749,6 +749,10 @@ class CommandEngine(
             files.pick("hepsi", true)
             return "Dosyaları seç."
         }
+        if (has(t, "mp3", "muzik cevir", "sarki cevir")) {
+            files.pick("ses", true)
+            return "Çevirmek istediğin şarkıları seç; açılan listede \"MP3'e çevir\"e bas."
+        }
         if (has(t, "dosyalar", "dosya listesi")) return files.describeFiles()
 
         val pdfI = idx(t, "pdf")
