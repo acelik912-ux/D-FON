@@ -1,0 +1,13 @@
+name: probe
+on:
+  push:
+    branches: [probe]
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sL -o s.jar https://repo1.maven.org/maven2/io/github/raphimc/jump3r/1.0.6/jump3r-1.0.6-sources.jar
+          mkdir s && cd s && unzip -q ../s.jar && find . -name "*.java" | sort
+          echo ===== ENC; cat de/sciss/jump3r/lowlevel/LameEncoder.java
+          echo ===== IMPORTS_JAVAX; grep -rl "javax.sound" . | sort
