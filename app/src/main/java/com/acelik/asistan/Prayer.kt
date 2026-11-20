@@ -38,6 +38,7 @@ object Prayer {
     val DURATIONS = listOf(15, 20, 30, 45, 60)
 
     private const val ACTION_SILENCE = "com.acelik.asistan.NAMAZ_SESSIZ"
+    private const val MOD_RE = 100
     private const val ACTION_RESTORE = "com.acelik.asistan.NAMAZ_SESLI"
     private const val NOTIF_ID = 7001
     private const val NOTIF_CD = 7002
@@ -363,6 +364,20 @@ object Prayer {
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val p = prefs(c)
         val dur = minutesOverride ?: durationFor(c, name)
+        if (mode(c) == "re") {
+            // Rahatsız Etmeyin yöntemi: zil moduna dokunmaz; Samsung/Android 17'de daha güvenilir
+            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (!nm.isNotificationPolicyAccessGranted) return "Rahatsız Etmeyin izni yok; İzinler'den aç."
+            if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL)
+                return "Rahatsız Etmeyin zaten açık olduğu için dokunmadım."
+            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+            val until = System.currentTimeMillis() + dur * 60_000L
+            p.edit().putBoolean("biz_aldik", true).putInt("yeniden", 0).putInt("bizim_mod", MOD_RE)
+                .putLong("geri_al", until).apply()
+            setRestoreAlarm(c, until)
+            notify(c, "🕌 $name vakti", "Rahatsız Etmeyin açık; ${fmt(until)}'de kapanacak.")
+            return "Rahatsız Etmeyin açıldı; ${fmt(until)}'de kapanacak."
+        }
         // Kullanıcı zaten sessiz/titreşimdeyse dokunma
         if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
             var target = if (mode(c) == "titresim") AudioManager.RINGER_MODE_VIBRATE else AudioManager.RINGER_MODE_SILENT
@@ -474,6 +489,15 @@ object Prayer {
         val audio = c.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val want = p.getInt("bizim_mod", -1)
         val tries = p.getInt("yeniden", 0)
+        if (want == MOD_RE) {
+            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (tries < 15 && nm.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL) {
+                p.edit().putInt("yeniden", tries + 1).apply()
+                try { nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY) } catch (ignored: Exception) {}
+                log(c, "${fmt(now)}: Rahatsız Etmeyin kapanmıştı; tekrar açtım (${tries + 1}/15).")
+            }
+            return
+        }
         if (want == -1 || audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || tries >= 15) return
         p.edit().putInt("yeniden", tries + 1).apply()
         // Tanılama: neyin çevirdiğini anlamak için o andaki durumu yaz
@@ -500,6 +524,15 @@ object Prayer {
         val cur = audio.ringerMode
         val ours = p.getInt("bizim_mod", -1)
         var msg: String
+        if (ours == MOD_RE) {
+            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            msg = try {
+                if (nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL)
+                    nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+                if (nm.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL) "Rahatsız Etmeyin kapatıldı."
+                else "Rahatsız Etmeyin kapatılamadı (filtre ${nm.currentInterruptionFilter})."
+            } catch (e: Exception) { "Rahatsız Etmeyin kapatılamadı: ${e.message}" }
+        } else
         // Kullanıcı bu arada modu kendisi değiştirdiyse ona dokunma
         if (cur == AudioManager.RINGER_MODE_NORMAL) {
             msg = "Telefon zaten sesliydi."

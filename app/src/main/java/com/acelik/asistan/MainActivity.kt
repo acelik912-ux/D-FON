@@ -1234,7 +1234,7 @@ class MainActivity : Activity() {
         val next = Prayer.nextEzan(this)
         showResult(
             "🔕 Açıldı. Seçili her vakitte ezanla birlikte ${Prayer.duration(this)} dk " +
-                (if (Prayer.mode(this) == "titresim") "titreşime" else "sessize") +
+                (when (Prayer.mode(this)) { "titresim" -> "titreşime"; "re" -> "Rahatsız Etmeyin'e"; else -> "sessize" }) +
                 " alırım, sonra kendiliğinden sesli yaparım." +
                 (next?.let { "\nSıradaki: ${it.first} ${Prayer.fmt(it.second)}" } ?: "") +
                 "\nTelefon zaten sessiz ya da titreşimdeyse dokunmam."
@@ -1291,9 +1291,11 @@ class MainActivity : Activity() {
         val modeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
         val silent = RadioButton(this).apply { text = "Sessiz"; id = View.generateViewId() }
         val vib = RadioButton(this).apply { text = "Titreşim"; id = View.generateViewId() }
+        val dnd = RadioButton(this).apply { text = "Rahatsız Etmeyin"; id = View.generateViewId() }
         modeGroup.addView(silent)
         modeGroup.addView(vib)
-        (if (Prayer.mode(this) == "titresim") vib else silent).isChecked = true
+        modeGroup.addView(dnd)
+        when (Prayer.mode(this)) { "titresim" -> vib; "re" -> dnd; else -> silent }.isChecked = true
         box.addView(modeGroup)
 
         box.addView(label("Sabah ezanı imsaktan kaç dk sonra okunuyor?"))
@@ -1335,7 +1337,7 @@ class MainActivity : Activity() {
                 val chosen = (0 until durGroup.childCount).map { durGroup.getChildAt(it) as RadioButton }
                     .firstOrNull { it.isChecked }?.tag as? Int
                 if (chosen != null) Prayer.setDuration(this, chosen)
-                Prayer.setMode(this, if (vib.isChecked) "titresim" else "sessiz")
+                Prayer.setMode(this, if (vib.isChecked) "titresim" else if (dnd.isChecked) "re" else "sessiz")
                 Prayer.setSabahOffset(this, offset.text.toString().toIntOrNull()?.coerceIn(0, 120) ?: 0)
                 Prayer.setCountdownEnabled(this, countdownBox.isChecked)
                 val parts = loc.text.toString().split(",", " ").mapNotNull { it.trim().toDoubleOrNull() }
