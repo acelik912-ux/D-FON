@@ -410,6 +410,11 @@ object Prayer {
         } catch (e: Exception) { Diag.log(c, "namaz", "zil sesi ayarlanamadı: ${e.message}") }
     }
 
+    private fun procImportance(): Int = try {
+        val i = android.app.ActivityManager.RunningAppProcessInfo()
+        android.app.ActivityManager.getMyMemoryState(i); i.importance
+    } catch (e: Exception) { -1 }
+
     /** Sesliye almak için sırayla birkaç yol dener. Başarı: mod NORMAL ve zil sesi 0'dan büyük. */
     private fun forceNormal(c: Context, audio: AudioManager): Boolean {
         fun ok() = audio.ringerMode == AudioManager.RINGER_MODE_NORMAL &&
@@ -503,7 +508,9 @@ object Prayer {
             val ok = forceNormal(c, audio)
             if (ok) verifyLater(c)
             msg = if (ok) "Telefon tekrar sesli yapıldı."
-            else "Sesli yapılamadı (mod ${audio.ringerMode}); birkaç saniye sonra tekrar deneyeceğim."
+            else "Sesli yapılamadı (mod ${audio.ringerMode}, zil seviyesi ${try { audio.getStreamVolume(AudioManager.STREAM_RING) } catch (e: Exception) { -1 }}, " +
+                "ekran ${if ((c.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isInteractive) "açık" else "kapalı"}, " +
+                "önem ${procImportance()}); birkaç saniye sonra tekrar deneyeceğim."
             if (!ok) {
                 val n = p.getInt("geri_deneme", 0)
                 if (n < 10) {
@@ -578,7 +585,7 @@ object Prayer {
                 }
             }
             ACTION_RESTORE -> {
-                restore(c)
+                RestoreService.start(c)
             }
             ACTION_TICK -> {
                 checkMissed(c)

@@ -103,6 +103,11 @@
         </activity>
 
         <service
+            android:name=".RestoreService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
+        <service
             android:name=".WakeService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
