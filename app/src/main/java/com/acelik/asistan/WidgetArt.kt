@@ -45,10 +45,74 @@ object WidgetArt {
         Theme("cini", "İznik Çini", 0xFFA9D3F0.toInt(), 0xFFFFD166.toInt(), R.drawable.widget_cell_on_turq, 0xFF3CC4C0.toInt(), 0xFF062A3A.toInt(), 30f, 48f),
         Theme("led", "Altın + Turkuaz LED", 0xFF9FE7E2.toInt(), 0xFFFFD166.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 40f, 20f),
         Theme("led_altin", "Altın LED", 0xFFE8D3A0.toInt(), 0xFFFFCF5A.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 40f, 20f),
+        Theme("foto_ayasofya", "Ayasofya (vakte göre değişir)", 0xFFF3E6D8.toInt(), 0xFFFFC94D.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 18f, 4f),
+        Theme("foto_kabe", "Kâbe", 0xFFF3E6D8.toInt(), 0xFFFFC94D.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 18f, 4f),
+        Theme("foto_kudus", "Kudüs · Kubbetü's-Sahra", 0xFFF3E6D8.toInt(), 0xFFFFC94D.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 18f, 4f),
+        Theme("foto_bahce", "Bahçe", 0xFFF3E6D8.toInt(), 0xFFFFC94D.toInt(), R.drawable.widget_cell_on, 0xFFE5BC5C.toInt(), 0xFF1A1405.toInt(), 18f, 4f),
     )
 
+    /** Sahne (resim) temaları için uygulama bağlamı; theme() çağrılınca dolar. */
+    private var app: Context? = null
+
+    /** Ayasofya sahnesi: vakte göre şafak / gündüz / akşam / gece. */
+    private fun sceneRes(t: Theme): Int {
+        return when (t.id) {
+            "foto_kabe" -> R.drawable.sahne_kabe
+            "foto_kudus" -> R.drawable.sahne_kudus
+            "foto_bahce" -> R.drawable.sahne_bahce
+            else -> {
+                val c = app
+                val now = System.currentTimeMillis()
+                val tt = if (c != null) Prayer.timesFor(c, 0) else null
+                if (tt == null) {
+                    val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                    when (hr) { in 5..7 -> R.drawable.sahne_ayasofya_safak; in 8..15 -> R.drawable.sahne_ayasofya_gunduz
+                        in 16..18 -> R.drawable.sahne_ayasofya_aksam; else -> R.drawable.sahne_ayasofya_gece }
+                } else when {
+                    // 0 imsak, 1 güneş, 2 öğle, 3 ikindi, 4 akşam, 5 yatsı
+                    now < tt[0] || now >= tt[5] -> R.drawable.sahne_ayasofya_gece
+                    now < tt[1] + 45 * 60_000L -> R.drawable.sahne_ayasofya_safak
+                    now < tt[4] - 60 * 60_000L -> R.drawable.sahne_ayasofya_gunduz
+                    else -> R.drawable.sahne_ayasofya_aksam
+                }
+            }
+        }
+    }
+
+    /** Resmi kırparak doldurur, köşeleri yuvarlar, yazılar okunsun diye üst ve alta gölge koyar. */
+    private fun drawScene(t: Theme, w: Int, h: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp)
+        val ctx = app ?: return bmp
+        val opt = android.graphics.BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        val src = android.graphics.BitmapFactory.decodeResource(ctx.resources, sceneRes(t), opt) ?: return bmp
+        val s = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
+        val dw = src.width * s; val dh = src.height * s
+        val dst = android.graphics.RectF((w - dw) / 2f, (h - dh) / 2f + 0f, (w + dw) / 2f, (h + dh) / 2f)
+        val r = minOf(w, h) * 0.11f
+        val clip = android.graphics.Path().apply { addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), r, r, android.graphics.Path.Direction.CW) }
+        cv.save(); cv.clipPath(clip)
+        cv.drawBitmap(src, null, dst, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        src.recycle()
+        val shade = Paint().apply {
+            shader = LinearGradient(0f, 0f, 0f, h.toFloat(),
+                intArrayOf(0xA6000000.toInt(), 0x33000000, 0x00000000, 0x55000000, 0xC0000000.toInt()),
+                floatArrayOf(0f, 0.28f, 0.45f, 0.62f, 1f), Shader.TileMode.CLAMP)
+        }
+        cv.drawRect(0f, 0f, w.toFloat(), h.toFloat(), shade)
+        cv.restore()
+        // ince altın çerçeve
+        val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = minOf(w, h) * 0.008f; color = 0x99E5BC5C.toInt() }
+        val e = edge.strokeWidth / 2
+        cv.drawRoundRect(e, e, w - e, h - e, r, r, edge)
+        return bmp
+    }
+
     private fun prefs(c: Context) = c.getSharedPreferences("dfon", Context.MODE_PRIVATE)
-    fun theme(c: Context): Theme = THEMES.firstOrNull { it.id == prefs(c).getString("widget_tema", "gece") } ?: THEMES[0]
+    fun theme(c: Context): Theme {
+        app = c.applicationContext
+        return THEMES.firstOrNull { it.id == prefs(c).getString("widget_tema", "gece") } ?: THEMES[0]
+    }
     fun setTheme(c: Context, id: String) = prefs(c).edit().putString("widget_tema", id).apply()
     /** Yazı büyüklüğü çarpanı (0.7 – 1.6) */
     fun textScale(c: Context): Float = prefs(c).getFloat("widget_yazi", 1f)
@@ -89,6 +153,7 @@ object WidgetArt {
 
     /** Arka plan + süsler (yazısız). */
     fun draw(t: Theme, wPx: Int, hPx: Int): Bitmap {
+        if (t.id.startsWith("foto_")) return drawScene(t, wPx.coerceAtLeast(40), hPx.coerceAtLeast(30))
         val bmp = Bitmap.createBitmap(wPx.coerceAtLeast(40), hPx.coerceAtLeast(30), Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val w = bmp.width.toFloat()

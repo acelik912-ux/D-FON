@@ -137,7 +137,13 @@ class PrayerWidget : AppWidgetProvider() {
             val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val p = refreshIntent(c)
             val exactOk = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
-            if (exactOk) am.setExact(AlarmManager.RTC, at + 1000, p) else am.set(AlarmManager.RTC, at + 1000, p)
+            // Ayasofya sahnesi gün içinde değiştiği için ara geçişlerde de yenile
+            var next = at + 1000
+            if (theme.id == "foto_ayasofya") {
+                listOf(today[1] + 45 * 60_000L, today[4] - 60 * 60_000L).filter { it > now + 1000 }.minOrNull()
+                    ?.let { if (it < next) next = it + 1000 }
+            }
+            if (exactOk) am.setExact(AlarmManager.RTC, next, p) else am.set(AlarmManager.RTC, next, p)
         }
     }
 }
