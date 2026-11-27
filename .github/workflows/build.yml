@@ -23,10 +23,14 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: İnternet izni olmadığını doğrula
+      - name: İnternet yalnızca hava durumu için mi, doğrula
+        # İnternet izni yalnızca hava durumu widget'ı (Open-Meteo) için var.
+        # Kodda bağlantı açan başka bir yer çıkarsa derleme durur.
         run: |
-          if grep -v "^\s*<!--" app/src/main/AndroidManifest.xml | grep -q 'uses-permission android:name="android.permission.INTERNET"'; then
-            echo "INTERNET izni bulundu!"; exit 1; fi
+          bad=$(grep -rln "openConnection\|HttpURLConnection\|OkHttp\|Socket(" app/src/main/java | grep -v "WeatherWidget.kt" || true)
+          if [ -n "$bad" ]; then echo "Hava dışında ağ bağlantısı: $bad"; exit 1; fi
+          if grep -o 'https\?://[a-zA-Z0-9.-]*' app/src/main/java/com/acelik/asistan/WeatherWidget.kt | grep -v "api.open-meteo.com"; then
+            echo "Hava widget'ı Open-Meteo dışında bir adrese bağlanıyor"; exit 1; fi
 
       - name: Testleri çalıştır
         run: gradle testDebugUnitTest --no-daemon --stacktrace
