@@ -81,11 +81,16 @@ object WidgetArt {
 
     /** Resmi kırparak doldurur, köşeleri yuvarlar, yazılar okunsun diye üst ve alta gölge koyar. */
     private fun drawScene(t: Theme, w: Int, h: Int): Bitmap {
+        val ctx = app ?: return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        return drawPhoto(ctx, sceneRes(t), w, h)
+    }
+
+    /** Resim kaynağını widget boyutunda, yuvarlak köşeli, gölgeli ve altın çerçeveli çizer. */
+    fun drawPhoto(ctx: Context, res: Int, w: Int, h: Int): Bitmap {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val cv = Canvas(bmp)
-        val ctx = app ?: return bmp
         val opt = android.graphics.BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-        val src = android.graphics.BitmapFactory.decodeResource(ctx.resources, sceneRes(t), opt) ?: return bmp
+        val src = android.graphics.BitmapFactory.decodeResource(ctx.resources, res, opt) ?: return bmp
         val s = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
         val dw = src.width * s; val dh = src.height * s
         val dst = android.graphics.RectF((w - dw) / 2f, (h - dh) / 2f + 0f, (w + dw) / 2f, (h + dh) / 2f)

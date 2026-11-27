@@ -9,6 +9,8 @@
     <string name="lock_summary">Kilitli uygulamalar sadece D-FON\'dan açılır; diğer uygulamaları sesle kullanırsın</string>
     <string name="lock_desc">1) Uygulama kilidi: D-FON\'da kilitlediğin uygulamalar başka yerden açılmaya çalışılırsa telefon ana ekrana döner. 2) Sesli kontrol: \"Bir iki üç fon\" dedikten sonra \"aşağı kaydır\", \"Ayarlar\'a dokun\", \"geri\", \"ekranı oku\", \"yaz: …\" gibi komutlarla diğer uygulamaları sesle kullanırsın. Ekrandaki yazılara sadece sen böyle bir komut verdiğinde bakılır; hiçbir şey kaydedilmez ya da gönderilmez.</string>
     <string name="widget_label">D-FON Namaz Vakitleri</string>
+    <string name="weather_label">D-FON Hava Durumu</string>
+    <string name="weather_desc">Anlık hava, sıcaklık ve 4 günlük tahmin</string>
     <string name="widget_desc">Sıradaki vakit, kalan süre ve günün vakitleri</string>
     <string name="tile_wake">D-FON dinleme</string>
     <string name="tile_prayer">Ezanda sessiz</string>
